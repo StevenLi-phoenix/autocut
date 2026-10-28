@@ -1,0 +1,27 @@
+[project]
+name = "autocut"
+version = "0.1.0"
+description = "Auto rough-cut for talking videos: remove dead air, retakes and fillers, review before render, export to NLEs. Human + agent friendly CLI."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = ["numpy>=2"]
+
+[project.scripts]
+autocut = "autocut.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/autocut"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+# 只为本机平台解析，离线（计费网络）时也能用缓存里的 wheel 锁定
+environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]

@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+/models/
+/fixtures/media/
+/evals/runs/*/work/
+*.autocut.json
+.DS_Store
+# eval 原始 transcript 体积大且含本机路径，只提交汇总；原始文件留在磁盘
+/evals/runs/**/*.jsonl
