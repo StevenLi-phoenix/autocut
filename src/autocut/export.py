@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from autocut.captions import cues_for, write_srt
-from autocut.plan import REASONS, Bed, Output, Plan, Segment
+from autocut.plan import REASONS, Output, Plan, Segment
 from autocut.probe import MediaInfo, probe
 from autocut.render import _display_size, default_stem, frame_grid, output_fps, output_size
 
@@ -54,6 +54,7 @@ class _Clip:
     f0: int  # 时间线起止帧
     f1: int
     in_f: int  # 素材入点（时间线帧率下的帧数）
+    src_f: int  # 用到的素材帧数（变速时 ≠ 片段帧数；slot 补定格时 < 片段帧数）
 
 
 def _fps_parts(fps: Fraction) -> tuple[int, bool]:
@@ -84,7 +85,16 @@ def _prepare(plan: Plan, output: Output):
             assets[sid] = _Asset(sid, p, s.kind, info, _display_size(info), snap_fps(vf), track, first_ch)
         return assets[sid]
 
-    clips = [_Clip(seg, asset(seg.source), f0, f1, int(round(seg.start * float(fps)))) for seg, f0, f1 in grid]
+    clips = []
+    for seg, f0, f1 in grid:
+        a = asset(seg.source)
+        n = f1 - f0
+        src_f = n if a.kind == "image" else max(1, int(round(n * seg.speed)))
+        if a.kind != "image" and seg.slot is not None:
+            src_f = max(1, min(src_f, int(round((seg.end - seg.start) * float(fps)))))  # slot 补定格时用到的素材比片段短
+        if a.kind != "image" and seg.slot is not None and seg.slot > (seg.end - seg.start) / seg.speed + 1 / float(fps):
+            log.warning("片段 %s 的 slot（%.2fs）比素材长，渲染时定格补齐；剪辑软件里这一段需要手动加冻结帧", seg.id, seg.slot)
+        clips.append(_Clip(seg, a, f0, f1, int(round(seg.start * float(fps))), src_f))
     beds = [(b, asset(b.source)) for b in output.beds if plan.sources[b.source].kind != "image"]
     return fps, (W, H), clips, beds, assets
 
@@ -269,7 +279,7 @@ def _write_fcpxml(plan: Plan, output: Output, path: Path, *, markers_only: bool,
         s = c.seg
         if (abs(s.speed - 1.0) > 1e-9 or s.reverse) and a.kind != "image":
             # 变速/倒放：timeMap 把片段时间映射回素材时间（best-effort，导入后请在剪辑软件里核对速度）
-            src_len = int(round((s.end - s.start) * float(fps)))
+            src_len = c.src_f
             tm = ET.SubElement(el, "timeMap")
             v0, v1 = (T(src_len), "0s") if s.reverse else ("0s", T(src_len))
             ET.SubElement(tm, "timept", time="0s", value=v0, interp="linear")
@@ -446,7 +456,7 @@ def _write_xmeml(plan: Plan, output: Output, path: Path) -> None:
             _sub(item, "start", c.f0)
             _sub(item, "end", c.f1)
             _sub(item, "in", c.in_f if a.kind != "image" else 0)
-            _sub(item, "out", (c.in_f + (c.f1 - c.f0)) if a.kind != "image" else (c.f1 - c.f0))
+            _sub(item, "out", (c.in_f + c.src_f) if a.kind != "image" else (c.f1 - c.f0))
 
         vi = ET.SubElement(vtrack, "clipitem", id=vid)
         common(vi, a.path.stem, "video", 1)
@@ -539,10 +549,9 @@ def _write_edl(plan: Plan, output: Output, path: Path) -> None:
         a, s = c.asset, c.seg
         has_a = bool(a.info.audio) and a.kind != "image" and not s.mute
         track = "AA/V" if has_a else "V"
-        src_len = c.f1 - c.f0
-        lines.append(f"{n:03d}  AX       {track:<5} C        {_tc(c.in_f, nominal)} {_tc(c.in_f + src_len, nominal)} {_tc(c.f0, nominal)} {_tc(c.f1, nominal)}")
+        lines.append(f"{n:03d}  AX       {track:<5} C        {_tc(c.in_f, nominal)} {_tc(c.in_f + c.src_f, nominal)} {_tc(c.f0, nominal)} {_tc(c.f1, nominal)}")
         if abs(s.speed - 1.0) > 1e-9:
-            lines.append(f"M2   AX       {float(fps) * (-s.speed if s.reverse else s.speed):06.1f}                {_tc(c.in_f, nominal)}")
+            lines.append(f"M2   AX       {float(fps) * (-s.speed if s.reverse else s.speed):05.1f}                {_tc(c.in_f, nominal)}")
         lines.append(f"* FROM CLIP NAME: {a.path.name}")
         lines.append(f"* SOURCE FILE: {a.path}")
         if s.text:

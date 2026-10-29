@@ -17,6 +17,7 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +92,15 @@ class CheckReport:
     metrics: dict[str, Any] = field(default_factory=dict)
     items: list[CheckItem] = field(default_factory=list)
     mode: str = "file"  # file | plan
+    checked_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
+
+    def save(self, path: str | Path) -> Path:
+        """存档成 JSON（发布前存一份，事后可以和平台的留存曲线对齐）。"""
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        log.info("体检报告已存档：%s", p)
+        return p
 
     @property
     def summary(self) -> str:
@@ -101,6 +111,8 @@ class CheckReport:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "schema": 1,
+            "checked_at": self.checked_at,
             "target": self.target,
             "platform": self.platform,
             "duration": round(self.duration, 2),
@@ -142,6 +154,7 @@ class _Tl:
     words: list[dict[str, Any]] | None = None  # 输出时间的词：{"text","start","end","punct"}
     edge: dict[str, Any] = field(default_factory=dict)  # 开头/结尾的句子完整性判断（有文字稿时）
     words_note: str = ""
+    will_normalize: bool = False
     lufs: float | None = None
     true_peak: float | None = None
     lra: float | None = None
@@ -219,7 +232,7 @@ def _stream_info(path: Path) -> dict[str, Any]:
             "comment": (d.get("format", {}).get("tags") or {}).get("comment", "")}
 
 
-def _file_tl(path: Path) -> _Tl:
+def _file_tl(path: Path, asr: bool = True) -> _Tl:
     t0 = time.perf_counter()
     info = probe(path)
     dur = info.duration
@@ -255,7 +268,7 @@ def _file_tl(path: Path) -> _Tl:
     try:
         from autocut.analysis import Media
 
-        words = Media(path).words()
+        words = Media(path).words() if asr else None
     except Exception as e:  # noqa: BLE001
         log.warning("取文字稿失败：%s", e)
         words = None
@@ -269,8 +282,9 @@ def _attach_words(tl: _Tl, words: list[dict[str, Any]] | None, source_words: dic
     if not words:
         tl.words_note = "没有文字稿（没有逐词文字稿，也没有可用的语音识别模型）"
         return
+    words = [{**w, "punct": bool(w.get("punct", _is_p(str(w["text"])) or w["start"] == w["end"]))} for w in words]
     tl.words = words
-    real = [w for w in words if not w.get("punct")]
+    real = [w for w in words if not w["punct"]]
     if not real:
         return
     first, last = real[0], real[-1]
@@ -281,13 +295,14 @@ def _attach_words(tl: _Tl, words: list[dict[str, Any]] | None, source_words: dic
         tail = words[-1]
         tl.edge = {
             "start_mid": None,  # 成片里没有"前文"，开头是否在句中无从判断
-            "end_mid": not (tail.get("punct") and tail["text"].strip()[-1:] in sent_end),
+            # 成片里只能看"最后一个词后面有没有句末标点"，而且只有话一直说到片尾（1s 内）才算被切断
+            "end_mid": (not (tail.get("punct") and tail["text"].strip()[-1:] in sent_end)) and last["end"] >= tl.duration - 1.0,
             "first_text": first["text"], "last_text": last["text"],
             "first_at": first["start"], "last_at": last["end"],
         }
 
 
-def _plan_tl(plan: Plan, output) -> _Tl:
+def _plan_tl(plan: Plan, output, asr: bool = True) -> _Tl:
     from autocut.analysis import Media
     from autocut.captions import _tokens, load_words
     from autocut.render import output_size
@@ -324,11 +339,15 @@ def _plan_tl(plan: Plan, output) -> _Tl:
             sigs[sid] = d
         return sigs[sid]
 
+    prev_seg = None
     for seg, o0, o1 in output.timeline():
         i0, i1 = int(round(o0 / DT)), min(n, int(round(o1 / DT)))
         if i1 <= i0:
             continue
         sg = sig(seg.source)
+        contiguous = (prev_seg is not None and prev_seg.source == seg.source and abs(prev_seg.end - seg.start) < 1e-3
+                      and prev_seg.speed == seg.speed == 1.0 and not prev_seg.reverse and not seg.reverse)
+        prev_seg = seg
         local = np.arange(i0, i1) * DT - o0
         content = seg.src_duration / seg.speed if sg["kind"] != "image" else 0.0
         live = local < content
@@ -344,7 +363,8 @@ def _plan_tl(plan: Plan, output) -> _Tl:
             for c in sg["cuts"]:
                 if seg.start <= c < seg.end and not seg.reverse:
                     cuts.append(o0 + (c - seg.start) / seg.speed)
-            cuts.append(o0) if o0 > 0 else None
+            if o0 > 0 and not contiguous:
+                cuts.append(o0)  # 方案里两个不相连的片段之间一定是画面跳变
         if sg["audio"] and not seg.mute:
             has_a = True
             idx = np.clip(np.round(ts / DT).astype(int), 0, len(sg["db"]) - 1)
@@ -366,7 +386,9 @@ def _plan_tl(plan: Plan, output) -> _Tl:
         db[i0:i1] = 10 * np.log10(10 ** (db[i0:i1] / 10) + 10 ** (bed_db / 10))
         if b.role == "narration":
             voice[i0:i1] |= sg["voice"][idx]
-    tl = _Tl(total, output_size(plan, output), db, voice, motion if has_v else np.full(n, np.nan), sorted(set(cuts)), has_v, has_a)
+    size = output_size(plan, output)
+    tl = _Tl(total, size, db, voice, motion if has_v else np.full(n, np.nan), sorted(set(cuts)), has_v, has_a)
+    tl.will_normalize = size[1] > size[0]  # render 对竖屏输出默认 loudnorm
     # 响度估算：把主轨音频拼起来算整合响度
     try:
         tl.lufs = _plan_lufs(plan, output, sigs)
@@ -376,11 +398,11 @@ def _plan_tl(plan: Plan, output) -> _Tl:
     tl.captions = {"subtitle_streams": 0, "sidecar": [], "burned": bool(caps.enabled and caps.burn), "known_absent": not caps.enabled,
                    "sidecar_planned": bool(caps.enabled and not caps.burn)}
     # 文字稿与句子完整性
-    toks = _tokens(plan, output)
+    toks = _tokens(plan, output, asr)
     tl.words = None
     if toks:
         words = [{"text": t.text, "start": t.start, "end": t.end, "punct": t.punct} for t in toks]
-        edge = _plan_edge(plan, toks, load_words)
+        edge = _plan_edge(plan, toks, lambda p_, sid: load_words(p_, sid, asr))
         _attach_words(tl, words, edge)
     else:
         tl.words_note = "没有文字稿（没有逐词文字稿，也没有可用的语音识别模型）"
@@ -434,7 +456,7 @@ def _plan_edge(plan: Plan, toks, load_words) -> dict[str, Any]:
     if prev is not None:
         gap = first.t0 - float(prev["end"])
         is_end = bool(prev["text"].strip()) and prev["text"].strip()[-1] in sent_end
-        res["start_mid"] = (not is_end) and gap < 0.5 and not (prev.get("text") and all(c in "，。！？、,.!?" for c in prev["text"]) and False)
+        res["start_mid"] = (not is_end) and gap < 0.5
         res["start_ctx"] = "".join(str(w["text"]) for w in w1[max(0, w1.index(prev) - 6) : w1.index(prev) + 1])
     else:
         res["start_mid"] = False
@@ -486,22 +508,24 @@ def _guess_platform(size: tuple[int, int]) -> str:
     return "douyin" if h / w >= 1.2 else "bilibili"
 
 
-def check(target: Path | str | Plan, *, platform: str = "auto", output_id: str | None = None) -> CheckReport:
-    """对成片或方案做发布前体检。platform：auto（按画幅猜）| douyin | tiktok | shorts | reels | bilibili | youtube。"""
+def check(target: Path | str | Plan, *, platform: str = "auto", output_id: str | None = None, asr: bool = True) -> CheckReport:
+    """对成片或方案做发布前体检。platform：auto（按画幅猜）| douyin | tiktok | shorts | reels | bilibili | youtube。
+
+    asr：True 时没有逐词文字稿就用本机语音识别补（慢，结果有缓存）；False 只用已有的文字稿，没有就只做声学检查。"""
     if platform != "auto" and platform not in PLATFORMS:
         raise ValueError(f"不认识的平台 {platform!r}；可选：auto、{', '.join(PLATFORMS)}")
     if isinstance(target, (str, Path)) and str(target).endswith(".json"):
         target = Plan.load(target)
     if isinstance(target, Plan):
         output = target.output(output_id)
-        tl = _plan_tl(target, output)
+        tl = _plan_tl(target, output, asr)
         name = f"{target.path or 'plan'}#{output.id}"
         mode = "plan"
     else:
         path = Path(target)
         if not path.exists():
             raise FileNotFoundError(f"找不到要体检的文件：{path}")
-        tl = _file_tl(path)
+        tl = _file_tl(path, asr)
         name, mode = str(path), "file"
     guessed = platform == "auto"
     plat = _guess_platform(tl.size) if guessed else platform
@@ -531,11 +555,11 @@ def check(target: Path | str | Plan, *, platform: str = "auto", output_id: str |
         dur = b - a
         if st >= 0.8:
             items.append(CheckItem(
-                "dead_air", "risk", f"{_mmss(a)}–{_mmss(b)} 有 {dur:.1f}s 没有人声、声音很小、画面也几乎不动，容易被当成视频结束了（S88）",
+                "dead_air", "risk", f"有 {dur:.1f}s 没有人声、声音很小、画面也几乎不动，容易被当成视频结束了（S88）",
                 f"剪掉 {_mmss(a)}–{_mmss(b)}（保留约 0.4s 的呼吸），或在这里加一句话、一个画面变化/字幕强调", a, b))
         else:
             items.append(CheckItem(
-                "dead_air", "warn", f"{_mmss(a)}–{_mmss(b)} 有 {dur:.1f}s 没有人声、声音很小（画面还在动）：观众只听到安静，可能怀疑设备出了问题",
+                "dead_air", "warn", f"有 {dur:.1f}s 没有人声、声音很小（画面还在动）：观众只听到安静，可能怀疑设备出了问题",
                 f"把 {_mmss(a)}–{_mmss(b)} 缩到 0.4–0.6s；确实要留白（操作演示）就加字幕或音效说明", a, b))
     m["dead_air"] = dead_list
     m["dead_air_total_s"] = round(sum(d["end"] - d["at"] for d in dead_list), 2)
@@ -579,7 +603,7 @@ def check(target: Path | str | Plan, *, platform: str = "auto", output_id: str |
         longest_static = max(((b - a, a, b) for a, b in stat_runs), default=(0.0, 0.0, 0.0))
         m["longest_static_s"] = round(longest_static[0], 2)
         for a, b in stat_runs:
-            items.append(CheckItem("static_long", "warn", f"{_mmss(a)}–{_mmss(min(b, tl.duration))} 画面 {min(b, tl.duration) - a:.0f}s 几乎没有变化",
+            items.append(CheckItem("static_long", "warn", f"画面 {min(b, tl.duration) - a:.0f}s 几乎没有变化",
                                    "在这段里加一次画面变化：放大、插入图片/录屏、切镜头，或加字幕强调重点", a, min(b, tl.duration)))
 
     # ---- 字幕 ----
@@ -605,7 +629,7 @@ def check(target: Path | str | Plan, *, platform: str = "auto", output_id: str |
         m["loudness"] = {"integrated_lufs": round(tl.lufs, 1), "true_peak_dbtp": None if tl.true_peak is None else round(tl.true_peak, 1),
                          "lra": None if tl.lra is None else round(tl.lra, 1), "target_lufs": P.loudness, "estimated": mode == "plan"}
         d = tl.lufs - P.loudness
-        if mode == "plan" and plan_will_normalize(target):
+        if mode == "plan" and tl.will_normalize:
             m["loudness"]["note"] = "渲染时会标准化到目标响度"
         elif d < -LOUDNESS_TOL:
             sev = "risk" if d < -8 else "warn"
@@ -651,12 +675,13 @@ def check(target: Path | str | Plan, *, platform: str = "auto", output_id: str |
                                f"砍掉铺垫和重复，剪到 {P.soft_max:.0f}s 内；信息量大就按话题切成多条"))
 
     # ---- 开头和结尾落在句子中间 ----
-    if tl.has_audio and n > 4:
-        if tl.voice[:2].all() and tl.db[0] > floor + 0.6 * (float(np.percentile(tl.db, 95)) - floor):
+    if tl.has_audio and n > 4 and tl.voice.any():
+        voice_med = float(np.median(tl.db[tl.voice]))  # 说话时的典型电平；开头/结尾的电平离它不远，说明话没说完
+        if tl.voice[:2].all() and tl.db[0] > voice_med - 12.0:
             items.append(CheckItem("start_midspeech", "warn", "第一帧就已经在说话，开头像是切在了词的中间", "开头往前补 0.2–0.3s，或确认这确实是句子的开头",
                                    0.0, 0.2))
         end_i = int(tl.duration / DT)
-        if tl.voice[max(end_i - 3, 0) : end_i].all() and tl.db[min(end_i - 1, n - 1)] > floor + 0.6 * (float(np.percentile(tl.db, 95)) - floor):
+        if tl.voice[max(end_i - 3, 0) : end_i].all() and tl.db[min(end_i - 1, n - 1)] > voice_med - 12.0:
             items.append(CheckItem("end_midspeech", "warn", "结尾处还在说话，最后像是被硬切断的", "结尾往后延 0.3–0.5s 到这句话说完，或在句末停顿处收尾",
                                    max(tl.duration - 0.3, 0), tl.duration))
     e = tl.edge
@@ -670,10 +695,9 @@ def check(target: Path | str | Plan, *, platform: str = "auto", output_id: str |
     if tl.words is None and tl.has_audio and voice_share >= 0.2:
         items.append(CheckItem("no_words", "info", f"{tl.words_note}：只做了声学检查，无法判断开头/结尾是否落在句子中间，也无法核对字幕",
                                "先生成逐词文字稿（AUTOCUT_WHISPER_MODEL 指向 whisper 模型）再体检"))
+    for it in items:  # 全片性的问题（响度、画幅、时长、字幕）没有具体时间点：标成整段，方便存档后和留存曲线对齐
+        if it.at is None:
+            it.at, it.end = 0.0, tl.duration
     log.info("体检 %s：%d 项（risk %d / warn %d）", name, len(items), sum(i.severity == "risk" for i in items), sum(i.severity == "warn" for i in items))
     return rep
 
-
-def plan_will_normalize(target: Any) -> bool:
-    """方案输出竖屏时 render 默认会做响度标准化。"""
-    return isinstance(target, Plan) and target.outputs and False

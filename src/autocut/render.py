@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Callable
 
 from autocut.captions import Cue, cues_for, format_srt
-from autocut.plan import Bed, Output, Overlay, Plan, Segment
+from autocut.plan import Bed, Output, Plan, Segment
 from autocut.probe import MediaInfo, probe
 
 log = logging.getLogger(__name__)
@@ -615,7 +615,7 @@ def _build(plan: Plan, output: Output, burn_override: bool | None, workdir: Path
 # ================================================================== 执行
 
 
-def _which_fonts_dir(workdir: Path) -> None:
+def _link_fonts(workdir: Path) -> None:
     f = _font()
     if f:
         d = workdir / "fonts"
@@ -740,7 +740,7 @@ def _render_one(plan: Plan, o: Output, base: Path, stem: str, burn_override: boo
     else:
         target = float(loudnorm)
     workdir = Path(tempfile.mkdtemp(prefix="autocut-render-"))
-    _which_fonts_dir(workdir)
+    _link_fonts(workdir)
     keep_workdir = dry_run
     try:
         b = _build(plan, o, burn_override, workdir, target is not None)

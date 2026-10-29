@@ -51,8 +51,10 @@ class _Tok:
 # ------------------------------------------------------------------ 文字稿读取
 
 
-def load_words(plan: Plan, source_id: str) -> list[dict[str, Any]] | None:
-    """读素材的逐词文字稿：优先 Source.words（JSON 路径），否则走 Media.words()（有缓存，没有识别模型时为 None）。"""
+def load_words(plan: Plan, source_id: str, asr: bool = True) -> list[dict[str, Any]] | None:
+    """读素材的逐词文字稿：优先 Source.words（JSON 路径），否则走 Media.words()（有缓存，没有识别模型时为 None）。
+
+    asr=False 时只读 Source.words，不触发语音识别（识别在 CPU 上很慢，体检默认可以不等它）。"""
     src = plan.sources[source_id]
     if src.words:
         p = Path(src.words)
@@ -64,7 +66,7 @@ def load_words(plan: Plan, source_id: str) -> list[dict[str, Any]] | None:
             log.warning("读不了 sources.%s.words=%s：%s；改用语音识别结果", source_id, p, e)
         else:
             return data["words"] if isinstance(data, dict) else data
-    if src.kind == "image":
+    if src.kind == "image" or not asr:
         return None
     try:
         from autocut.analysis import Media
@@ -102,20 +104,46 @@ def _spans(plan: Plan, output: Output) -> list[tuple[str, float, float, float, f
     return sorted(spans, key=lambda s: s[3])
 
 
-def _tokens(plan: Plan, output: Output) -> list[_Tok]:
+_UNIT = re.compile(r"[⺀-鿿豈-﫿＀-￯]|[A-Za-z0-9'’]+|\S")
+_COARSE_UNITS = 4  # 一项超过这么多个字/词（或中间夹着标点），就当作粗粒度文字稿拆开
+
+
+def _explode(words: list[dict[str, Any]]) -> list[tuple[str, float, float]]:
+    """把粗粒度文字稿（一项一整句，例如 narrate 的配音稿）拆成字/词，时间按显示宽度比例分配，后面才能按标点和 max_chars 断行。
+
+    whisper 的逐词结果（一项一两个字或一个英文词）原样通过。"""
+    out: list[tuple[str, float, float]] = []
+    for w in words:
+        text, ws, we = str(w["text"]), float(w["start"]), float(w["end"])
+        units = _UNIT.findall(text)
+        if len(units) <= _COARSE_UNITS and not any(_is_punct(u) for u in units[:-1]):
+            out.append((text, ws, we))
+            continue
+        widths = [0.0 if _is_punct(u) else _wlen(u) for u in units]
+        total = sum(widths) or 1.0
+        t = ws
+        for u, wd in zip(units, widths):
+            d = (we - ws) * wd / total
+            out.append((u, t, t + d))
+            t += d
+    return out
+
+
+def _tokens(plan: Plan, output: Output, asr: bool = True) -> list[_Tok]:
     spans = _spans(plan, output)
-    words_cache: dict[str, list[dict[str, Any]] | None] = {}
+    words_cache: dict[str, list[tuple[str, float, float]]] = {}
     toks: list[_Tok] = []
     for sid, s0, s1, o0, o1, speed in spans:
         if sid not in words_cache:
-            words_cache[sid] = load_words(plan, sid)
+            raw = load_words(plan, sid, asr) or []
+            words_cache[sid] = _explode(raw)
+            if len(words_cache[sid]) > len(raw):
+                log.debug("素材 %s 的文字稿是粗粒度的：%d 项拆成 %d 个字/词", sid, len(raw), len(words_cache[sid]))
         words = words_cache[sid]
         if not words:
             continue
         span_toks: list[_Tok] = []
-        for w in words:
-            ws, we = float(w["start"]), float(w["end"])
-            text = str(w["text"])
+        for text, ws, we in words:
             mid = (ws + we) / 2
             if not (s0 - 1e-3 <= mid <= s1 + 1e-3):
                 continue  # 被剪掉的词，或者被剪口劈成两半、重心在外面的词
@@ -247,7 +275,7 @@ def cues_for(plan: Plan, output: Output) -> list[Cue]:
         nxt_start = rows[j + 1][0] if j + 1 < len(rows) else total
         end = max(e + TAIL_HOLD, s + MIN_CUE)
         end = min(end, nxt_start, total)
-        cues.append(Cue(round(s, 3), round(max(end, s + 0.05), 3), text))
+        cues.append(Cue(round(s, 3), min(round(max(end, s + 0.05), 3), math.floor(total * 1000) / 1000), text))
     log.info("字幕 %s：%d 个词 → %d 条（max_chars=%d）", output.id, len(toks), len(cues), max_chars)
     return cues
 
