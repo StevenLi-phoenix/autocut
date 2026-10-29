@@ -1,0 +1,18 @@
+{
+  "runset": "baseline-2026-10-28",
+  "arm": "baseline",
+  "model": "haiku",
+  "task": "T3",
+  "n": 2,
+  "session_id": "0a567116-6011-4677-b651-636d17d11e7d",
+  "task_rc": 0,
+  "debrief_rc": "0",
+  "wall_s": 238,
+  "claude_version": "2.1.303 (Claude Code)",
+  "claude_effort_env": "xhigh",
+  "sandbox": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline-2026-10-28/T3-haiku-2",
+  "sandbox_files": [
+    "talk_zh_clean.mp4"
+  ],
+  "timed_out": false
+}

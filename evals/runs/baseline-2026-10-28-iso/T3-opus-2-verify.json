@@ -1,0 +1,256 @@
+{
+  "task": "retake_filler",
+  "source": "/Users/lishuyu/Codes/autocut/fixtures/media/talk_zh.mp4",
+  "output": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline-2026-10-28-iso/T3-opus-2/talk_zh_clean.mp4",
+  "checks": {
+    "exists": true,
+    "probe_ok": true,
+    "has_video": true,
+    "has_audio": true,
+    "av_drift": 0.0446,
+    "av_drift_ok": true,
+    "dead_air_count": 3,
+    "choppy_count": 0,
+    "kept_intact": true,
+    "tagged_removed": true
+  },
+  "reasons": [],
+  "durations": {
+    "source": 40.7447,
+    "output": 33.078,
+    "removed": 7.6667
+  },
+  "segments": [
+    {
+      "idx": 0,
+      "start": 0.0,
+      "end": 2.8108,
+      "dur": 2.8108,
+      "text": "大家好，欢迎回到我的频道。",
+      "tag": null,
+      "score": 0.9995,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 0.0,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 1,
+      "start": 3.1608,
+      "end": 9.2534,
+      "dur": 6.0926,
+      "text": "今天我们来聊一聊，怎么把一段录屏快速剪成可以发布的视频。",
+      "tag": null,
+      "score": 0.9997,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 3.1608,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 2,
+      "start": 11.1534,
+      "end": 14.1093,
+      "dur": 2.9559,
+      "text": "首先你需要准备好原始素材。",
+      "tag": null,
+      "score": 0.9996,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 11.1534,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 3,
+      "start": 14.5093,
+      "end": 14.7434,
+      "dur": 0.2341,
+      "text": "嗯",
+      "tag": "filler",
+      "score": 0.4346,
+      "status": "absent",
+      "absent_below": 0.5512,
+      "out_start": 27.5272,
+      "coverage": 0.4858,
+      "clipped": false
+    },
+    {
+      "idx": 4,
+      "start": 15.3434,
+      "end": 19.606,
+      "dur": 4.2626,
+      "text": "然后打开剪辑软件，把素材拖进时间线。",
+      "tag": null,
+      "score": 0.9998,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 14.5434,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 5,
+      "start": 22.206,
+      "end": 24.2546,
+      "dur": 2.0486,
+      "text": "第二步是把没用的停顿",
+      "tag": "retake",
+      "score": 0.1706,
+      "status": "absent",
+      "absent_below": 0.3,
+      "out_start": 27.2492,
+      "coverage": 0.1528,
+      "clipped": false
+    },
+    {
+      "idx": 6,
+      "start": 24.9546,
+      "end": 27.0839,
+      "dur": 2.1293,
+      "text": "不对，我重新说一遍。",
+      "tag": "retake",
+      "score": 0.189,
+      "status": "absent",
+      "absent_below": 0.3,
+      "out_start": 27.9997,
+      "coverage": 0.2193,
+      "clipped": false
+    },
+    {
+      "idx": 7,
+      "start": 27.8839,
+      "end": 31.4622,
+      "dur": 3.5783,
+      "text": "第二步，是把没有用的停顿全部删掉。",
+      "tag": null,
+      "score": 0.9922,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 20.2172,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 8,
+      "start": 34.8622,
+      "end": 37.8789,
+      "dur": 3.0167,
+      "text": "最后检查一遍，导出就可以了。",
+      "tag": null,
+      "score": 0.9933,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 27.1955,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 9,
+      "start": 38.1789,
+      "end": 39.5447,
+      "dur": 1.3658,
+      "text": "我们下期再见。",
+      "tag": null,
+      "score": 0.9924,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 30.5122,
+      "coverage": 1.0,
+      "clipped": false
+    }
+  ],
+  "gaps": [
+    {
+      "between": [
+        0,
+        1
+      ],
+      "at": 2.811,
+      "gap": 0.35
+    },
+    {
+      "between": [
+        1,
+        2
+      ],
+      "at": 9.253,
+      "gap": 1.9
+    },
+    {
+      "between": [
+        2,
+        4
+      ],
+      "at": 14.109,
+      "gap": 0.434
+    },
+    {
+      "between": [
+        4,
+        7
+      ],
+      "at": 18.806,
+      "gap": 1.411
+    },
+    {
+      "between": [
+        7,
+        8
+      ],
+      "at": 23.795,
+      "gap": 3.4
+    },
+    {
+      "between": [
+        8,
+        9
+      ],
+      "at": 30.212,
+      "gap": 0.3
+    }
+  ],
+  "dead_air": [
+    {
+      "between": [
+        1,
+        2
+      ],
+      "at": 9.253,
+      "gap": 1.9
+    },
+    {
+      "between": [
+        4,
+        7
+      ],
+      "at": 18.806,
+      "gap": 1.411
+    },
+    {
+      "between": [
+        7,
+        8
+      ],
+      "at": 23.795,
+      "gap": 3.4
+    }
+  ],
+  "choppy": [],
+  "edge_gaps": {
+    "head": 0.0,
+    "tail": 1.2
+  },
+  "pass": true,
+  "other_files": [
+    "talk_zh_clean.mp4",
+    "work/asr_clean.json",
+    "work/asr_raw.json",
+    "work/asr.py",
+    "work/cut.sh",
+    "work/env.py"
+  ],
+  "candidates_checked": 1
+}

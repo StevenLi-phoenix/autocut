@@ -1,0 +1,43 @@
+[21:19:39] T5-haiku-1: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T5-haiku-1, max-turns 80, timeout 1200)
+[21:19:39] T5-opus-1: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T5-opus-1, max-turns 80, timeout 1200)
+[21:19:39] T5-opus-2: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T5-opus-2, max-turns 80, timeout 1200)
+[21:19:39] T5-haiku-2: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T5-haiku-2, max-turns 80, timeout 1200)
+[21:20:47] T5-haiku-1: task done rc=0 in 68s
+[21:20:52] T5-haiku-1: debrief rc=0
+[21:20:53] T5-haiku-1: verify pass=false
+[21:20:53] T6-opus-1: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T6-opus-1, max-turns 80, timeout 1200)
+[21:20:54] T5-haiku-2: task done rc=0 in 75s
+[21:20:59] T5-haiku-2: debrief rc=0
+[21:20:59] T5-haiku-2: verify pass=false
+[21:21:00] T6-haiku-1: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T6-haiku-1, max-turns 80, timeout 1200)
+[21:21:25] T5-opus-2: task done rc=0 in 106s
+[21:21:29] T5-opus-1: task done rc=0 in 110s
+[21:21:37] T5-opus-1: debrief rc=0
+[21:21:39] T5-opus-2: debrief rc=0
+[21:21:40] T5-opus-1: verify pass=true
+[21:21:40] T6-opus-2: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T6-opus-2, max-turns 80, timeout 1200)
+[21:21:41] T5-opus-2: verify pass=true
+[21:21:41] T6-haiku-2: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T6-haiku-2, max-turns 80, timeout 1200)
+[21:23:37] T6-haiku-1: task done rc=0 in 157s
+[21:23:43] T6-haiku-1: debrief rc=0
+[21:23:46] T6-haiku-1: verify pass=true
+[21:23:46] T7-opus-1: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T7-opus-1, max-turns 80, timeout 1200)
+[21:24:20] T6-haiku-2: task done rc=0 in 159s
+[21:24:26] T6-haiku-2: debrief rc=0
+[21:24:28] T6-haiku-2: verify pass=true
+[21:24:28] T7-haiku-1: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T7-haiku-1, max-turns 80, timeout 1200)
+evals/run_matrix.sh: line 15: 63831 Done                    for task in ${TASKS_LIST:-T1 T2 T3 T4};
+do
+    for n in $(seq 1 "$reps");
+    do
+        for model in opus haiku;
+        do
+            echo "$runset $arm $model $task $n";
+        done;
+    done;
+done
+     63833 Terminated: 15          | ${CAFFEINATE:-caffeinate -dims} xargs -P "${P:-4}" -L 1 "$ROOT/evals/run_headless.sh"
+/Users/lishuyu/Codes/autocut/evals/run_headless.sh: line 101: 65003 Terminated: 15          ( cd "$sandbox" && "${clean_env[@]}" timeout -k 20 "$task_timeout" ${sandbox_run[@]+"${sandbox_run[@]}"} claude -p "$prompt" --model "$model" --output-format stream-json --verbose --dangerously-skip-permissions --max-turns "$max_turns" ${ARM_CLAUDE_ARGS[@]+"${ARM_CLAUDE_ARGS[@]}"} < /dev/null > "$jsonl" 2> "$runs/$case_id.stderr" )
+/Users/lishuyu/Codes/autocut/evals/run_headless.sh: line 101: 32302 Terminated: 15          ( cd "$sandbox" && "${clean_env[@]}" timeout -k 20 "$task_timeout" ${sandbox_run[@]+"${sandbox_run[@]}"} claude -p "$prompt" --model "$model" --output-format stream-json --verbose --dangerously-skip-permissions --max-turns "$max_turns" ${ARM_CLAUDE_ARGS[@]+"${ARM_CLAUDE_ARGS[@]}"} < /dev/null > "$jsonl" 2> "$runs/$case_id.stderr" )
+/Users/lishuyu/Codes/autocut/evals/run_headless.sh: line 101: 62630 Terminated: 15          ( cd "$sandbox" && "${clean_env[@]}" timeout -k 20 "$task_timeout" ${sandbox_run[@]+"${sandbox_run[@]}"} claude -p "$prompt" --model "$model" --output-format stream-json --verbose --dangerously-skip-permissions --max-turns "$max_turns" ${ARM_CLAUDE_ARGS[@]+"${ARM_CLAUDE_ARGS[@]}"} < /dev/null > "$jsonl" 2> "$runs/$case_id.stderr" )
+/Users/lishuyu/Codes/autocut/evals/run_headless.sh: line 101: 26898 Terminated: 15          ( cd "$sandbox" && "${clean_env[@]}" timeout -k 20 "$task_timeout" ${sandbox_run[@]+"${sandbox_run[@]}"} claude -p "$prompt" --model "$model" --output-format stream-json --verbose --dangerously-skip-permissions --max-turns "$max_turns" ${ARM_CLAUDE_ARGS[@]+"${ARM_CLAUDE_ARGS[@]}"} < /dev/null > "$jsonl" 2> "$runs/$case_id.stderr" )

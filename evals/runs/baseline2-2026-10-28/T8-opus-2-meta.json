@@ -1,0 +1,21 @@
+{
+  "runset": "baseline2-2026-10-28",
+  "arm": "baseline",
+  "model": "opus",
+  "task": "T8",
+  "n": 2,
+  "session_id": "aee9a2a5-0bc9-4f7f-9e35-1e80cc9bd559",
+  "task_rc": 0,
+  "debrief_rc": "0",
+  "wall_s": 200,
+  "claude_version": "2.1.303 (Claude Code)",
+  "claude_effort_env": "xhigh",
+  "sandbox": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T8-opus-2",
+  "new_files": [
+    "knowledge.mp4"
+  ],
+  "max_turns": 80,
+  "timeout_s": 1200,
+  "isolated": true,
+  "timed_out": false
+}

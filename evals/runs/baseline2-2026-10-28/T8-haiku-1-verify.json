@@ -1,0 +1,69 @@
+{
+  "task": "knowledge",
+  "source": "/Users/lishuyu/Codes/autocut/fixtures/media/knowledge",
+  "output": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T8-haiku-1/knowledge.mp4",
+  "checks": {
+    "exists": true,
+    "probe_ok": true,
+    "has_video": true,
+    "has_audio": true,
+    "av_drift": 0.0147,
+    "av_drift_ok": true,
+    "landscape": true,
+    "duration_ok": true,
+    "has_speech": true,
+    "images_ok": true
+  },
+  "reasons": [],
+  "output_info": {
+    "duration": 38.748,
+    "width": 1920,
+    "height": 1080,
+    "audio_streams": 1,
+    "subtitle_streams": 0
+  },
+  "loudness": {
+    "lufs": -18.5,
+    "true_peak_dbfs": -5.6
+  },
+  "duration_bounds": [
+    23.03,
+    52.64
+  ],
+  "nonsilent_frac": 0.709,
+  "images": [
+    {
+      "image": "img1.png",
+      "best_mse": 0.00007,
+      "used": true,
+      "seconds_shown": 16,
+      "first_at_s": 0
+    },
+    {
+      "image": "img2.png",
+      "best_mse": 0.00002,
+      "used": true,
+      "seconds_shown": 11,
+      "first_at_s": 16
+    },
+    {
+      "image": "img3.png",
+      "best_mse": 0.00008,
+      "used": true,
+      "seconds_shown": 10,
+      "first_at_s": 28
+    }
+  ],
+  "images_used": 3,
+  "subtitles": {
+    "status": "burned_or_missing",
+    "where": null,
+    "file": null,
+    "script_char_overlap": 0.0
+  },
+  "pass": true,
+  "other_files": [
+    "knowledge.mp4"
+  ],
+  "candidates_checked": 1
+}

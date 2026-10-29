@@ -1,0 +1,22 @@
+{
+ "T5-haiku-1": "content",
+ "T5-haiku-2": "content",
+ "T5-opus-1": "content",
+ "T5-opus-2": "content",
+ "T6-haiku-1": "probe",
+ "T6-haiku-2": "probe",
+ "T6-opus-1": "content",
+ "T6-opus-2": "content",
+ "T7-haiku-1": "content",
+ "T7-haiku-2": "content",
+ "T7-opus-1": "content",
+ "T7-opus-2": "content",
+ "T8-haiku-1": "probe",
+ "T8-haiku-2": "probe",
+ "T8-opus-1": "content",
+ "T8-opus-2": "content",
+ "T9-haiku-1": "probe",
+ "T9-haiku-2": "probe",
+ "T9-opus-1": "content",
+ "T9-opus-2": "content"
+}

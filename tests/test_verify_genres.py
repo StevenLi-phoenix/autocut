@@ -130,6 +130,38 @@ def test_clips_ideal_passes(clips_ideal):
     assert not any(c["overlaps_decoy"] for c in res["clips"])
 
 
+def test_clips_with_processed_audio_still_pass(clips_ideal, work):
+    """成片常见的音频处理：响度归一 + 淡入、片头加 2s 提示音。这些窗口回源匹配不上，只记录，不判失败。"""
+    d = work / "clips_processed"
+    shutil.copytree(clips_ideal, d)
+    for n in ("clip_1.mp4", "clip_2.mp4"):
+        src = clips_ideal / n
+        M.ff("-i", str(src), "-af", "loudnorm=I=-14:TP=-1.5,afade=t=in:d=1", "-c:v", "copy", "-c:a", "aac", str(d / n))
+    M.ff("-f", "lavfi", "-i", "sine=frequency=880:duration=2:sample_rate=48000", "-i", str(clips_ideal / "clip_3.mp4"),
+         "-filter_complex", "[1:a]aformat=sample_rates=48000:channel_layouts=mono[c];[0:a]aformat=channel_layouts=mono[s];[s][c]concat=n=2:v=0:a=1[a]",
+         "-map", "1:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", str(d / "clip_3.mp4"))
+    res = run("stream_clips", "stream_vod", MEDIA / "stream_vod.mp4", d)
+    assert res["pass"], res["reasons"]
+    assert [tuple(c["covers_highlights"]) for c in res["clips"]] == [(0,), (1,), (2,)]
+    assert res["clips"][2]["foreign_audio_windows"] >= 1  # 片头音效窗口只记录
+
+
+def test_clips_spliced_from_two_places_does_not_get_credit_for_the_gap(work):
+    """前一半是 highlight 1 的开头，后一半跳到 100s 之后：highlight 1 只覆盖一半，不能算覆盖。"""
+    d = work / "clips_spliced"
+    d.mkdir()
+    src = MEDIA / "stream_vod.mp4"
+    M.ff("-i", str(src), "-filter_complex",
+         "[0:v]trim=28:34,setpts=PTS-STARTPTS[v0];[0:a]atrim=28:34,asetpts=PTS-STARTPTS[a0];"
+         "[0:v]trim=100:112,setpts=PTS-STARTPTS[v1];[0:a]atrim=100:112,asetpts=PTS-STARTPTS[a1];"
+         "[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a];[v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960[vv]",
+         "-map", "[vv]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(d / "clip_1.mp4"))
+    for i, (s_, dur) in enumerate(HL_CLIPS[1:], 2):
+        M.vertical_clip(src, d / f"clip_{i}.mp4", s_, dur)
+    res = run("stream_clips", "stream_vod", src, d)
+    assert not res["pass"] and res["clips"][0]["multi_segment"] and res["clips"][0]["covers_highlights"] == []
+
+
 def test_clips_decoy_instead_of_highlight_fails(clips_ideal, work):
     d = work / "clips_decoy"
     shutil.copytree(clips_ideal, d)
@@ -338,6 +370,16 @@ def test_ytpmv_ideal_passes(work):
     assert res["pass"], res["reasons"]
     assert res["occurrence_count"] >= 12 and res["aligned_frac"] >= 0.9 and res["distinct_syllables"] >= 6
     assert res["checks"]["has_repeats"]
+
+
+def test_ytpmv_with_processed_bgm_still_has_bgm(work):
+    """BGM 被 chorus（相位调制）+ 压缩处理过：全频段波形互相关会塌，低频段仍应认出 BGM；对拍仍按正确偏移判。"""
+    raw = M.mux_audio(ytpmv_audio(BEAT_SCHEDULE), work / "ytpmv_pre.mp4")
+    out = work / "ytpmv_processed.mp4"
+    M.ff("-i", str(raw), "-af", "chorus=0.5:0.9:50|60:0.4|0.32:0.25|0.4:2|1.3,acompressor=threshold=-24dB:ratio=6", "-c:v", "copy", "-c:a", "aac", str(out))
+    res = run("ytpmv", "ytpmv", MEDIA / "ytpmv", out)
+    assert res["bgm"]["score_low"] > res["bgm"]["score_full"] and res["bgm"]["score_low"] >= 0.4, res["bgm"]
+    assert res["checks"]["bgm_present"]
 
 
 def test_ytpmv_bgm_only_fails_on_syllables(work):

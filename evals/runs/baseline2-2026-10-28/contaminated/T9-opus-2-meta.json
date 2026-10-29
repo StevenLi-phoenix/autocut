@@ -1,0 +1,22 @@
+{
+  "runset": "baseline2-2026-10-28",
+  "arm": "baseline",
+  "model": "opus",
+  "task": "T9",
+  "n": 2,
+  "session_id": "7a817702-7dcf-4261-86d6-758350ccb75a",
+  "task_rc": 0,
+  "debrief_rc": "0",
+  "wall_s": 397,
+  "claude_version": "2.1.303 (Claude Code)",
+  "claude_effort_env": "xhigh",
+  "sandbox": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T9-opus-2",
+  "new_files": [
+    "make_ytpmv.py",
+    "ytpmv.mp4"
+  ],
+  "max_turns": 80,
+  "timeout_s": 1200,
+  "isolated": true,
+  "timed_out": false
+}

@@ -1,0 +1,20 @@
+{
+  "runset": "baseline2-2026-10-28",
+  "arm": "baseline",
+  "model": "opus",
+  "task": "T5",
+  "n": 2,
+  "session_id": "793ed5bf-72e5-47ea-8c98-73bec322dc9a",
+  "task_rc": 0,
+  "debrief_rc": "0",
+  "wall_s": 2416,
+  "claude_version": "2.1.303 (Claude Code)",
+  "claude_effort_env": "xhigh",
+  "sandbox": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T5-opus-2",
+  "new_files": [
+    "game_cut.mp4"
+  ],
+  "max_turns": 80,
+  "timeout_s": 1200,
+  "timed_out": false
+}

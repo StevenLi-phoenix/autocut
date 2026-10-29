@@ -1,0 +1,242 @@
+{
+  "task": "stream_clips",
+  "source": "/Users/lishuyu/Codes/autocut/fixtures/media/stream_vod.mp4",
+  "output": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T6-opus-1",
+  "checks": {
+    "exists": true,
+    "exactly_three_files": true,
+    "durations_ok": true,
+    "vertical_ok": true,
+    "all_matched_to_source": true,
+    "distinct_highlights": true
+  },
+  "reasons": [],
+  "clips": [
+    {
+      "file": "clip_1.mp4",
+      "exists": true,
+      "duration": 22.1,
+      "width": 1080,
+      "height": 1920,
+      "ratio": 0.5625,
+      "duration_ok": true,
+      "vertical_ok": true,
+      "has_audio": true,
+      "loudness": {
+        "lufs": -15.4,
+        "true_peak_dbfs": -1.4
+      },
+      "subtitles": {
+        "status": "burned_or_missing",
+        "where": null,
+        "file": null
+      },
+      "windows": {
+        "total": 13,
+        "matched": 10,
+        "unique": 7
+      },
+      "segments": [
+        {
+          "src_offset": 29.5,
+          "windows": 5,
+          "src_covered": [
+            [
+              31.0,
+              34.0
+            ],
+            [
+              32.5,
+              35.5
+            ],
+            [
+              34.0,
+              37.0
+            ],
+            [
+              35.5,
+              38.5
+            ],
+            [
+              37.0,
+              40.0
+            ]
+          ]
+        }
+      ],
+      "src_start": 31.0,
+      "src_end": 40.0,
+      "multi_segment": false,
+      "foreign_audio_windows": 3,
+      "covers_highlights": [
+        0
+      ],
+      "lead_in_s": [
+        2.0
+      ],
+      "overlaps_decoy": false
+    },
+    {
+      "file": "clip_2.mp4",
+      "exists": true,
+      "duration": 22.3,
+      "width": 1080,
+      "height": 1920,
+      "ratio": 0.5625,
+      "duration_ok": true,
+      "vertical_ok": true,
+      "has_audio": true,
+      "loudness": {
+        "lufs": -15.7,
+        "true_peak_dbfs": -1.1
+      },
+      "subtitles": {
+        "status": "burned_or_missing",
+        "where": null,
+        "file": null
+      },
+      "windows": {
+        "total": 13,
+        "matched": 11,
+        "unique": 8
+      },
+      "segments": [
+        {
+          "src_offset": 79.5,
+          "windows": 5,
+          "src_covered": [
+            [
+              81.0,
+              84.0
+            ],
+            [
+              82.5,
+              85.5
+            ],
+            [
+              84.0,
+              87.0
+            ],
+            [
+              85.5,
+              88.5
+            ],
+            [
+              87.0,
+              90.0
+            ]
+          ]
+        }
+      ],
+      "src_start": 81.0,
+      "src_end": 90.0,
+      "multi_segment": false,
+      "foreign_audio_windows": 2,
+      "covers_highlights": [
+        1
+      ],
+      "lead_in_s": [
+        2.0
+      ],
+      "overlaps_decoy": false
+    },
+    {
+      "file": "clip_3.mp4",
+      "exists": true,
+      "duration": 17.5,
+      "width": 1080,
+      "height": 1920,
+      "ratio": 0.5625,
+      "duration_ok": true,
+      "vertical_ok": true,
+      "has_audio": true,
+      "loudness": {
+        "lufs": -14.9,
+        "true_peak_dbfs": -1.1
+      },
+      "subtitles": {
+        "status": "burned_or_missing",
+        "where": null,
+        "file": null
+      },
+      "windows": {
+        "total": 10,
+        "matched": 8,
+        "unique": 5
+      },
+      "segments": [
+        {
+          "src_offset": 127.5,
+          "windows": 5,
+          "src_covered": [
+            [
+              129.0,
+              132.0
+            ],
+            [
+              130.5,
+              133.5
+            ],
+            [
+              132.0,
+              135.0
+            ],
+            [
+              133.5,
+              136.5
+            ],
+            [
+              135.0,
+              138.0
+            ]
+          ]
+        }
+      ],
+      "src_start": 129.0,
+      "src_end": 138.0,
+      "multi_segment": false,
+      "foreign_audio_windows": 2,
+      "covers_highlights": [
+        2
+      ],
+      "lead_in_s": [
+        2.0
+      ],
+      "overlaps_decoy": false
+    }
+  ],
+  "extras": [],
+  "subtitles_status": [
+    "burned_or_missing",
+    "burned_or_missing",
+    "burned_or_missing"
+  ],
+  "pass": true,
+  "other_files": [
+    "__pycache__/make_clips.cpython-314.pyc",
+    "__pycache__/test_make_clips.cpython-314.pyc",
+    ".venv/.gitignore",
+    ".venv/bin/activate",
+    ".venv/bin/activate_this.py",
+    ".venv/bin/activate.bat",
+    ".venv/bin/activate.csh",
+    ".venv/bin/activate.fish",
+    ".venv/bin/activate.nu",
+    ".venv/bin/activate.ps1",
+    ".venv/bin/activate.xsh",
+    ".venv/bin/deactivate.bat",
+    ".venv/bin/pydoc.bat",
+    ".venv/CACHEDIR.TAG",
+    ".venv/pyvenv.cfg",
+    "build/clip_1.ass",
+    "build/clip_2.ass",
+    "build/clip_3.ass",
+    "clip_1.mp4",
+    "clip_2.mp4",
+    "clip_3.mp4",
+    "clips.json",
+    "make_clips.py",
+    "test_make_clips.py"
+  ],
+  "candidates_checked": 1
+}

@@ -1,0 +1,305 @@
+{
+  "task": "stream_clips",
+  "source": "/Users/lishuyu/Codes/autocut/fixtures/media/stream_vod.mp4",
+  "output": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T6-haiku-2",
+  "checks": {
+    "exists": true,
+    "exactly_three_files": true,
+    "durations_ok": true,
+    "vertical_ok": true,
+    "all_matched_to_source": true,
+    "distinct_highlights": false
+  },
+  "reasons": [
+    "clip_2.mp4 源区间 58.0–79.0s 没有完整覆盖任何 highlight（只碰到诱饵段）",
+    "clip_3.mp4 源区间 84.0–103.5s 没有完整覆盖任何 highlight",
+    "3 个切片没有对应 3 个不同的 highlight"
+  ],
+  "clips": [
+    {
+      "file": "clip_1.mp4",
+      "exists": true,
+      "duration": 20.0,
+      "width": 1080,
+      "height": 1920,
+      "ratio": 0.5625,
+      "duration_ok": true,
+      "vertical_ok": true,
+      "has_audio": true,
+      "loudness": {
+        "lufs": -19.9,
+        "true_peak_dbfs": -2.9
+      },
+      "subtitles": {
+        "status": "burned_or_missing",
+        "where": null,
+        "file": null
+      },
+      "windows": {
+        "total": 12,
+        "matched": 12,
+        "unique": 6
+      },
+      "segments": [
+        {
+          "src_offset": 33.0,
+          "windows": 12,
+          "src_covered": [
+            [
+              33.0,
+              36.0
+            ],
+            [
+              34.5,
+              37.5
+            ],
+            [
+              36.0,
+              39.0
+            ],
+            [
+              37.5,
+              40.5
+            ],
+            [
+              39.0,
+              42.0
+            ],
+            [
+              40.5,
+              43.5
+            ],
+            [
+              42.0,
+              45.0
+            ],
+            [
+              43.5,
+              46.5
+            ],
+            [
+              45.0,
+              48.0
+            ],
+            [
+              46.5,
+              49.5
+            ],
+            [
+              48.0,
+              51.0
+            ],
+            [
+              49.5,
+              52.5
+            ]
+          ]
+        }
+      ],
+      "src_start": 33.0,
+      "src_end": 52.5,
+      "multi_segment": false,
+      "foreign_audio_windows": 0,
+      "covers_highlights": [
+        0
+      ],
+      "lead_in_s": [
+        0.0
+      ],
+      "overlaps_decoy": false
+    },
+    {
+      "file": "clip_2.mp4",
+      "exists": true,
+      "duration": 22.0,
+      "width": 1080,
+      "height": 1920,
+      "ratio": 0.5625,
+      "duration_ok": true,
+      "vertical_ok": true,
+      "has_audio": true,
+      "loudness": {
+        "lufs": -31.5,
+        "true_peak_dbfs": -12.1
+      },
+      "subtitles": {
+        "status": "burned_or_missing",
+        "where": null,
+        "file": null
+      },
+      "windows": {
+        "total": 13,
+        "matched": 13,
+        "unique": 6
+      },
+      "segments": [
+        {
+          "src_offset": 58.0,
+          "windows": 13,
+          "src_covered": [
+            [
+              58.0,
+              61.0
+            ],
+            [
+              59.5,
+              62.5
+            ],
+            [
+              61.0,
+              64.0
+            ],
+            [
+              62.5,
+              65.5
+            ],
+            [
+              64.0,
+              67.0
+            ],
+            [
+              65.5,
+              68.5
+            ],
+            [
+              67.0,
+              70.0
+            ],
+            [
+              68.5,
+              71.5
+            ],
+            [
+              70.0,
+              73.0
+            ],
+            [
+              71.5,
+              74.5
+            ],
+            [
+              73.0,
+              76.0
+            ],
+            [
+              74.5,
+              77.5
+            ],
+            [
+              76.0,
+              79.0
+            ]
+          ]
+        }
+      ],
+      "src_start": 58.0,
+      "src_end": 79.0,
+      "multi_segment": false,
+      "foreign_audio_windows": 0,
+      "covers_highlights": [],
+      "lead_in_s": [],
+      "overlaps_decoy": true
+    },
+    {
+      "file": "clip_3.mp4",
+      "exists": true,
+      "duration": 20.0,
+      "width": 1080,
+      "height": 1920,
+      "ratio": 0.5625,
+      "duration_ok": true,
+      "vertical_ok": true,
+      "has_audio": true,
+      "loudness": {
+        "lufs": -22.7,
+        "true_peak_dbfs": -3.1
+      },
+      "subtitles": {
+        "status": "burned_or_missing",
+        "where": null,
+        "file": null
+      },
+      "windows": {
+        "total": 12,
+        "matched": 12,
+        "unique": 5
+      },
+      "segments": [
+        {
+          "src_offset": 84.0,
+          "windows": 12,
+          "src_covered": [
+            [
+              84.0,
+              87.0
+            ],
+            [
+              85.5,
+              88.5
+            ],
+            [
+              87.0,
+              90.0
+            ],
+            [
+              88.5,
+              91.5
+            ],
+            [
+              90.0,
+              93.0
+            ],
+            [
+              91.5,
+              94.5
+            ],
+            [
+              93.0,
+              96.0
+            ],
+            [
+              94.5,
+              97.5
+            ],
+            [
+              96.0,
+              99.0
+            ],
+            [
+              97.5,
+              100.5
+            ],
+            [
+              99.0,
+              102.0
+            ],
+            [
+              100.5,
+              103.5
+            ]
+          ]
+        }
+      ],
+      "src_start": 84.0,
+      "src_end": 103.5,
+      "multi_segment": false,
+      "foreign_audio_windows": 0,
+      "covers_highlights": [],
+      "lead_in_s": [],
+      "overlaps_decoy": false
+    }
+  ],
+  "extras": [],
+  "subtitles_status": [
+    "burned_or_missing",
+    "burned_or_missing",
+    "burned_or_missing"
+  ],
+  "pass": false,
+  "other_files": [
+    "clip_1.mp4",
+    "clip_2.mp4",
+    "clip_3.mp4"
+  ],
+  "candidates_checked": 1
+}

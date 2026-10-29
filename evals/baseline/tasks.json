@@ -1,0 +1,118 @@
+{
+  "_comment": "委托人原话（中文）。baseline 与后续候选版 autocut 共用同一套任务；suffix 统一追加在每个 prompt 末尾。被测 agent 的 prompt 里不提 autocut、不给剪辑提示。字段（缺省值对应第一批 T1–T4）：sources=复制进沙盒的素材（相对 fixtures/media，文件或目录，保持目录结构）；outputs=期望产物文件名；verify_tool=evals 下的校验器；verify_task/--task；verify_source=传给 --source；verify_output=传给 --output（'.' 表示沙盒目录）；max_turns/timeout=复杂任务可覆盖。",
+  "suffix": "\n\n（工作时请简要说明你选每一步的理由；有任何拿不准的地方也顺手说出来。注意：当前网络按流量计费，不要下载模型、不要安装新的软件包。）",
+  "debrief": "刚才这个任务结束了，请简短回答，每条 1–2 句：1) 哪一步你最没把握，为什么？2) 你是怎么确认输出是对的？哪些地方没有确认？3) 过程中哪些命令的输出让你困惑、太长或者没用（如果有）？",
+  "tasks": {
+    "T1": {
+      "verify_task": "long_pauses",
+      "source": "talk_zh.mp4",
+      "truth": "talk_zh.truth.json",
+      "output": "talk_zh_cut.mp4",
+      "prompt": "talk_zh.mp4 是我录的一段口播，帮我把说话中间那些长时间的停顿剪掉，正常的短停顿留着，别剪得太碎。输出成 talk_zh_cut.mp4。"
+    },
+    "T2": {
+      "verify_task": "noisy_silence",
+      "source": "lecture_en.mp4",
+      "truth": "lecture_en.truth.json",
+      "output": "lecture_en_cut.mp4",
+      "prompt": "lecture_en.mp4 是在比较吵的教室里录的课，帮我把没人说话的部分去掉，输出 lecture_en_cut.mp4，顺便告诉我一共剪掉了多少时间。"
+    },
+    "T3": {
+      "verify_task": "retake_filler",
+      "source": "talk_zh.mp4",
+      "truth": "talk_zh.truth.json",
+      "output": "talk_zh_clean.mp4",
+      "prompt": "talk_zh.mp4 里有一处我说错了又重新说的地方，还有个“嗯”，帮我把说错的那段和口头禅剪掉，输出 talk_zh_clean.mp4。"
+    },
+    "T4": {
+      "verify_task": "export_nle",
+      "source": "talk_zh.mp4",
+      "truth": "talk_zh.truth.json",
+      "output": null,
+      "prompt": "帮我把 talk_zh.mp4 粗剪一下（去掉长停顿），但先别渲染成片，导出一个 Final Cut Pro 或 DaVinci Resolve 能打开的工程/时间线文件，我要自己再微调。"
+    },
+    "T5": {
+      "verify_tool": "verify_genres.py",
+      "verify_task": "game_commentary",
+      "truth": "game_commentary.truth.json",
+      "sources": [
+        "game_commentary.mp4"
+      ],
+      "verify_source": "game_commentary.mp4",
+      "outputs": [
+        "game_cut.mp4"
+      ],
+      "verify_output": "game_cut.mp4",
+      "max_turns": 80,
+      "timeout": 1200,
+      "prompt": "game_commentary.mp4 是我用 OBS 录的游戏实况（有好几条音轨），帮我把我没说话、也没啥看点的无聊段落剪掉，打怪那种虽然没说话但很精彩的地方要留着。输出 game_cut.mp4。"
+    },
+    "T6": {
+      "verify_tool": "verify_genres.py",
+      "verify_task": "stream_clips",
+      "truth": "stream_vod.truth.json",
+      "sources": [
+        "stream_vod.mp4",
+        "stream_vod.chat.jsonl"
+      ],
+      "verify_source": "stream_vod.mp4",
+      "outputs": [
+        "clip_1.mp4",
+        "clip_2.mp4",
+        "clip_3.mp4"
+      ],
+      "verify_output": ".",
+      "max_turns": 80,
+      "timeout": 1200,
+      "prompt": "stream_vod.mp4 是我的直播录像，stream_vod.chat.jsonl 是弹幕记录。帮我切 3 个高光片段发抖音：每个 15–30 秒，竖屏 9:16，带字幕。输出 clip_1.mp4、clip_2.mp4、clip_3.mp4。"
+    },
+    "T7": {
+      "verify_tool": "verify_genres.py",
+      "verify_task": "montage",
+      "truth": "montage.truth.json",
+      "sources": [
+        "montage"
+      ],
+      "verify_source": "montage",
+      "outputs": [
+        "montage.mp4"
+      ],
+      "verify_output": "montage.mp4",
+      "max_turns": 80,
+      "timeout": 1200,
+      "prompt": "montage 文件夹里有 6 段素材和一首 BGM（music_120bpm.wav），帮我做一个 15 秒左右的卡点混剪，画面切换要踩在鼓点上。输出 montage.mp4。"
+    },
+    "T8": {
+      "verify_tool": "verify_genres.py",
+      "verify_task": "knowledge",
+      "truth": "knowledge.truth.json",
+      "sources": [
+        "knowledge"
+      ],
+      "verify_source": "knowledge",
+      "outputs": [
+        "knowledge.mp4"
+      ],
+      "verify_output": "knowledge.mp4",
+      "max_turns": 80,
+      "timeout": 1200,
+      "prompt": "根据 knowledge/script.md 做一个知识科普短视频：要有配音、字幕和配图（图在 knowledge 文件夹里），横屏。输出 knowledge.mp4。"
+    },
+    "T9": {
+      "verify_tool": "verify_genres.py",
+      "verify_task": "ytpmv",
+      "truth": "ytpmv.truth.json",
+      "sources": [
+        "ytpmv"
+      ],
+      "verify_source": "ytpmv",
+      "outputs": [
+        "ytpmv.mp4"
+      ],
+      "verify_output": "ytpmv.mp4",
+      "max_turns": 80,
+      "timeout": 1200,
+      "prompt": "用 ytpmv/source_clip.mp4 里的台词做一个鬼畜：跟着 ytpmv/music_120bpm.wav 的节奏，把字切开重复、卡在拍子上。输出 ytpmv.mp4。"
+    }
+  }
+}

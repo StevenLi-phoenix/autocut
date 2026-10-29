@@ -1,0 +1,88 @@
+{
+  "task": "export_nle",
+  "source": "/Users/lishuyu/Codes/autocut/fixtures/media/talk_zh.mp4",
+  "output": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline-2026-10-28/T4-haiku-1/talk_zh_rough_cut.fcpxml",
+  "checks": {
+    "exists": true,
+    "parse_ok": true,
+    "has_events": true,
+    "source_ref": true,
+    "duration_in_range": true,
+    "speech_covered": true,
+    "no_dead_air": true
+  },
+  "reasons": [],
+  "format": "fcpxml",
+  "events": 7,
+  "timeline_duration": 31.5667,
+  "sequence_duration_attr": 31.566666666666666,
+  "duration_bounds": [
+    24.0827,
+    39.7447
+  ],
+  "speech_cover": [
+    {
+      "idx": 0,
+      "text": "大家好，欢迎回到我的频道。",
+      "covered": 1.0
+    },
+    {
+      "idx": 1,
+      "text": "今天我们来聊一聊，怎么把一段录屏快速剪成可以发布的视频。",
+      "covered": 1.0
+    },
+    {
+      "idx": 2,
+      "text": "首先你需要准备好原始素材。",
+      "covered": 1.0
+    },
+    {
+      "idx": 4,
+      "text": "然后打开剪辑软件，把素材拖进时间线。",
+      "covered": 1.0
+    },
+    {
+      "idx": 7,
+      "text": "第二步，是把没有用的停顿全部删掉。",
+      "covered": 1.0
+    },
+    {
+      "idx": 8,
+      "text": "最后检查一遍，导出就可以了。",
+      "covered": 1.0
+    },
+    {
+      "idx": 9,
+      "text": "我们下期再见。",
+      "covered": 1.0
+    }
+  ],
+  "long_gap_kept": [
+    {
+      "start": 9.2534,
+      "end": 11.1534,
+      "kept": 0.3
+    },
+    {
+      "start": 19.606,
+      "end": 22.206,
+      "kept": 0.333
+    },
+    {
+      "start": 31.4622,
+      "end": 34.8622,
+      "kept": 0.3
+    },
+    {
+      "start": 39.5447,
+      "end": 40.7447,
+      "kept": 0.155
+    }
+  ],
+  "pass": true,
+  "other_files": [
+    "talk_zh_cut_list.json",
+    "talk_zh_rough_cut.fcpxml"
+  ],
+  "candidates_checked": 1
+}

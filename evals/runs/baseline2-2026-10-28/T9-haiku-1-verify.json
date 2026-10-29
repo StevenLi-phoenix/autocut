@@ -1,0 +1,200 @@
+{
+  "task": "ytpmv",
+  "source": "/Users/lishuyu/Codes/autocut/fixtures/media/ytpmv",
+  "output": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T9-haiku-1/ytpmv.mp4",
+  "checks": {
+    "exists": true,
+    "probe_ok": true,
+    "has_video": true,
+    "has_audio": true,
+    "av_drift": 0.0,
+    "av_drift_ok": true,
+    "bgm_present": true,
+    "enough_occurrences": true,
+    "has_repeats": true,
+    "on_beat": false
+  },
+  "reasons": [
+    "音节对拍比例 57%（起点 29% / 能量起音 57%） < 70%（±50ms 内，拍点/半拍）"
+  ],
+  "output_info": {
+    "duration": 16.0,
+    "width": 640,
+    "height": 360,
+    "audio_streams": 1,
+    "subtitle_streams": 0
+  },
+  "loudness": {
+    "lufs": -22.0,
+    "true_peak_dbfs": -2.9
+  },
+  "bgm": {
+    "score": 0.9771,
+    "offset": -0.0001,
+    "windows": [
+      {
+        "win_start": 0.0,
+        "score": 0.965,
+        "bgm_pos": 8.0,
+        "offset": 8.0
+      },
+      {
+        "win_start": 2.6,
+        "score": 0.8155,
+        "bgm_pos": 2.5999,
+        "offset": -0.0001
+      },
+      {
+        "win_start": 5.2,
+        "score": 0.8337,
+        "bgm_pos": 5.2,
+        "offset": 0.0
+      },
+      {
+        "win_start": 7.8,
+        "score": 0.81,
+        "bgm_pos": 7.7999,
+        "offset": -0.0001
+      },
+      {
+        "win_start": 10.4,
+        "score": 0.9771,
+        "bgm_pos": 10.3999,
+        "offset": -0.0001
+      },
+      {
+        "win_start": 13.0,
+        "score": 0.8622,
+        "bgm_pos": 5.0,
+        "offset": -8.0
+      }
+    ],
+    "band": "low",
+    "score_full": 0.2647,
+    "score_low": 0.9771
+  },
+  "occurrences": [
+    {
+      "syllable": 2,
+      "text": "的",
+      "pos": 2.513,
+      "score": 0.997,
+      "err_ms": 12.9,
+      "onset_err_ms": 26.0
+    },
+    {
+      "syllable": 3,
+      "text": "会",
+      "pos": 2.7321,
+      "score": 0.814,
+      "err_ms": 18.0,
+      "onset_err_ms": 48.6
+    },
+    {
+      "syllable": 4,
+      "text": "谢",
+      "pos": 3.6662,
+      "score": 1.0,
+      "err_ms": 83.9,
+      "onset_err_ms": 30.0
+    },
+    {
+      "syllable": 4,
+      "text": "谢",
+      "pos": 4.6662,
+      "score": 1.0,
+      "err_ms": 83.9,
+      "onset_err_ms": 30.0
+    },
+    {
+      "syllable": 6,
+      "text": "也",
+      "pos": 6.1219,
+      "score": 0.98,
+      "err_ms": 121.8,
+      "onset_err_ms": 96.0
+    },
+    {
+      "syllable": 7,
+      "text": "太",
+      "pos": 7.1425,
+      "score": 0.933,
+      "err_ms": 107.6,
+      "onset_err_ms": 38.1
+    },
+    {
+      "syllable": 8,
+      "text": "离",
+      "pos": 7.6498,
+      "score": 0.913,
+      "err_ms": 100.3,
+      "onset_err_ms": 89.9
+    },
+    {
+      "syllable": 9,
+      "text": "谱",
+      "pos": 8.7203,
+      "score": 0.966,
+      "err_ms": 29.8,
+      "onset_err_ms": 48.7
+    },
+    {
+      "syllable": 9,
+      "text": "谱",
+      "pos": 9.7203,
+      "score": 0.975,
+      "err_ms": 29.8,
+      "onset_err_ms": 48.7
+    },
+    {
+      "syllable": 10,
+      "text": "了",
+      "pos": 10.1184,
+      "score": 0.983,
+      "err_ms": 118.3,
+      "onset_err_ms": 115.9
+    },
+    {
+      "syllable": 11,
+      "text": "吧",
+      "pos": 11.1146,
+      "score": 0.962,
+      "err_ms": 114.5,
+      "onset_err_ms": 120.1
+    },
+    {
+      "syllable": 1,
+      "text": "真",
+      "pos": 12.6483,
+      "score": 0.785,
+      "err_ms": 101.8,
+      "onset_err_ms": 69.2
+    },
+    {
+      "syllable": 4,
+      "text": "谢",
+      "pos": 14.1662,
+      "score": 1.0,
+      "err_ms": 83.9,
+      "onset_err_ms": 30.0
+    },
+    {
+      "syllable": 6,
+      "text": "也",
+      "pos": 15.1219,
+      "score": 0.981,
+      "err_ms": 121.8,
+      "onset_err_ms": 96.0
+    }
+  ],
+  "occurrence_count": 14,
+  "distinct_syllables": 10,
+  "aligned_frac_start": 0.286,
+  "aligned_frac_onset": 0.571,
+  "aligned_frac": 0.571,
+  "pass": false,
+  "other_files": [
+    "ytpmv.mp4"
+  ],
+  "candidates_checked": 1
+}

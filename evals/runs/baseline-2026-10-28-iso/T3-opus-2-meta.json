@@ -1,0 +1,26 @@
+{
+  "runset": "baseline-2026-10-28-iso",
+  "arm": "baseline",
+  "model": "opus",
+  "task": "T3",
+  "n": 2,
+  "session_id": "211f6966-d5bb-486e-8dbd-84cffe6692b5",
+  "task_rc": 0,
+  "debrief_rc": "0",
+  "wall_s": 147,
+  "claude_version": "2.1.303 (Claude Code)",
+  "claude_effort_env": "xhigh",
+  "sandbox": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline-2026-10-28-iso/T3-opus-2",
+  "new_files": [
+    "talk_zh_clean.mp4",
+    "work/asr_clean.json",
+    "work/asr_raw.json",
+    "work/asr.py",
+    "work/cut.sh",
+    "work/env.py"
+  ],
+  "max_turns": 60,
+  "timeout_s": 900,
+  "isolated": true,
+  "timed_out": false
+}

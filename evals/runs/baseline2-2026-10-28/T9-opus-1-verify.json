@@ -1,0 +1,424 @@
+{
+  "task": "ytpmv",
+  "source": "/Users/lishuyu/Codes/autocut/fixtures/media/ytpmv",
+  "output": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T9-opus-1/ytpmv.mp4",
+  "checks": {
+    "exists": true,
+    "probe_ok": true,
+    "has_video": true,
+    "has_audio": true,
+    "av_drift": 0.0,
+    "av_drift_ok": true,
+    "bgm_present": true,
+    "enough_occurrences": true,
+    "has_repeats": true,
+    "on_beat": true
+  },
+  "reasons": [],
+  "output_info": {
+    "duration": 16.0,
+    "width": 640,
+    "height": 360,
+    "audio_streams": 1,
+    "subtitle_streams": 0
+  },
+  "loudness": {
+    "lufs": -13.8,
+    "true_peak_dbfs": -0.5
+  },
+  "bgm": {
+    "score": 0.4689,
+    "offset": -8.0049,
+    "windows": [
+      {
+        "win_start": 0.0,
+        "score": 0.279,
+        "bgm_pos": 7.9951,
+        "offset": 7.9951
+      },
+      {
+        "win_start": 2.6,
+        "score": 0.3107,
+        "bgm_pos": 10.595,
+        "offset": 7.995
+      },
+      {
+        "win_start": 5.2,
+        "score": 0.325,
+        "bgm_pos": 5.1951,
+        "offset": -0.0049
+      },
+      {
+        "win_start": 7.8,
+        "score": 0.4003,
+        "bgm_pos": 7.7953,
+        "offset": -0.0047
+      },
+      {
+        "win_start": 10.4,
+        "score": 0.3587,
+        "bgm_pos": 2.3952,
+        "offset": -8.0048
+      },
+      {
+        "win_start": 13.0,
+        "score": 0.4689,
+        "bgm_pos": 4.9951,
+        "offset": -8.0049
+      }
+    ],
+    "band": "low",
+    "score_full": 0.084,
+    "score_low": 0.4689
+  },
+  "occurrences": [
+    {
+      "syllable": 0,
+      "text": "我",
+      "pos": 0.0119,
+      "score": 0.971,
+      "err_ms": 7.0,
+      "onset_err_ms": 17.8
+    },
+    {
+      "syllable": 0,
+      "text": "我",
+      "pos": 0.4949,
+      "score": 0.971,
+      "err_ms": 10.0,
+      "onset_err_ms": 0.8
+    },
+    {
+      "syllable": 0,
+      "text": "我",
+      "pos": 0.9949,
+      "score": 0.93,
+      "err_ms": 10.0,
+      "onset_err_ms": 0.8
+    },
+    {
+      "syllable": 0,
+      "text": "我",
+      "pos": 1.2449,
+      "score": 0.928,
+      "err_ms": 10.0,
+      "onset_err_ms": 0.8
+    },
+    {
+      "syllable": 0,
+      "text": "我",
+      "pos": 1.9949,
+      "score": 0.914,
+      "err_ms": 10.0,
+      "onset_err_ms": 0.8
+    },
+    {
+      "syllable": 1,
+      "text": "真",
+      "pos": 2.2132,
+      "score": 0.909,
+      "err_ms": 41.7,
+      "onset_err_ms": 9.1
+    },
+    {
+      "syllable": 2,
+      "text": "的",
+      "pos": 2.4929,
+      "score": 0.975,
+      "err_ms": 12.0,
+      "onset_err_ms": 1.1
+    },
+    {
+      "syllable": 3,
+      "text": "会",
+      "pos": 2.6871,
+      "score": 0.915,
+      "err_ms": 67.8,
+      "onset_err_ms": 1.2
+    },
+    {
+      "syllable": 4,
+      "text": "谢",
+      "pos": 2.8861,
+      "score": 0.883,
+      "err_ms": 118.8,
+      "onset_err_ms": 4.9
+    },
+    {
+      "syllable": 4,
+      "text": "谢",
+      "pos": 3.3861,
+      "score": 0.918,
+      "err_ms": 118.8,
+      "onset_err_ms": 4.9
+    },
+    {
+      "syllable": 4,
+      "text": "谢",
+      "pos": 3.6361,
+      "score": 0.913,
+      "err_ms": 118.8,
+      "onset_err_ms": 4.9
+    },
+    {
+      "syllable": 0,
+      "text": "我",
+      "pos": 3.9949,
+      "score": 0.915,
+      "err_ms": 10.0,
+      "onset_err_ms": 0.8
+    },
+    {
+      "syllable": 1,
+      "text": "真",
+      "pos": 4.2133,
+      "score": 0.909,
+      "err_ms": 41.6,
+      "onset_err_ms": 9.0
+    },
+    {
+      "syllable": 2,
+      "text": "的",
+      "pos": 4.4929,
+      "score": 0.975,
+      "err_ms": 12.0,
+      "onset_err_ms": 1.1
+    },
+    {
+      "syllable": 3,
+      "text": "会",
+      "pos": 4.6871,
+      "score": 0.915,
+      "err_ms": 67.8,
+      "onset_err_ms": 1.2
+    },
+    {
+      "syllable": 4,
+      "text": "谢",
+      "pos": 4.8861,
+      "score": 0.884,
+      "err_ms": 118.8,
+      "onset_err_ms": 4.9
+    },
+    {
+      "syllable": 4,
+      "text": "谢",
+      "pos": 5.1361,
+      "score": 0.913,
+      "err_ms": 118.8,
+      "onset_err_ms": 4.9
+    },
+    {
+      "syllable": 3,
+      "text": "会",
+      "pos": 5.9371,
+      "score": 0.822,
+      "err_ms": 67.8,
+      "onset_err_ms": 1.2
+    },
+    {
+      "syllable": 3,
+      "text": "会",
+      "pos": 6.1871,
+      "score": 0.913,
+      "err_ms": 67.8,
+      "onset_err_ms": 1.2
+    },
+    {
+      "syllable": 4,
+      "text": "谢",
+      "pos": 6.3861,
+      "score": 0.884,
+      "err_ms": 118.8,
+      "onset_err_ms": 4.9
+    },
+    {
+      "syllable": 3,
+      "text": "会",
+      "pos": 6.9371,
+      "score": 0.919,
+      "err_ms": 67.8,
+      "onset_err_ms": 1.2
+    },
+    {
+      "syllable": 3,
+      "text": "会",
+      "pos": 7.1871,
+      "score": 0.913,
+      "err_ms": 67.8,
+      "onset_err_ms": 1.2
+    },
+    {
+      "syllable": 5,
+      "text": "这",
+      "pos": 7.9631,
+      "score": 0.969,
+      "err_ms": 41.8,
+      "onset_err_ms": 2.8
+    },
+    {
+      "syllable": 6,
+      "text": "也",
+      "pos": 8.2419,
+      "score": 0.907,
+      "err_ms": 13.0,
+      "onset_err_ms": 19.2
+    },
+    {
+      "syllable": 7,
+      "text": "太",
+      "pos": 8.4375,
+      "score": 0.962,
+      "err_ms": 67.4,
+      "onset_err_ms": 2.1
+    },
+    {
+      "syllable": 8,
+      "text": "离",
+      "pos": 8.9945,
+      "score": 0.935,
+      "err_ms": 10.4,
+      "onset_err_ms": 0.0
+    },
+    {
+      "syllable": 9,
+      "text": "谱",
+      "pos": 9.4301,
+      "score": 0.983,
+      "err_ms": 74.8,
+      "onset_err_ms": 3.7
+    },
+    {
+      "syllable": 9,
+      "text": "谱",
+      "pos": 10.4301,
+      "score": 0.916,
+      "err_ms": 74.8,
+      "onset_err_ms": 3.7
+    },
+    {
+      "syllable": 9,
+      "text": "谱",
+      "pos": 11.4301,
+      "score": 0.852,
+      "err_ms": 74.8,
+      "onset_err_ms": 3.7
+    },
+    {
+      "syllable": 5,
+      "text": "这",
+      "pos": 11.9631,
+      "score": 0.969,
+      "err_ms": 41.8,
+      "onset_err_ms": 2.8
+    },
+    {
+      "syllable": 6,
+      "text": "也",
+      "pos": 12.2419,
+      "score": 0.908,
+      "err_ms": 13.0,
+      "onset_err_ms": 19.2
+    },
+    {
+      "syllable": 7,
+      "text": "太",
+      "pos": 12.4375,
+      "score": 0.964,
+      "err_ms": 67.4,
+      "onset_err_ms": 2.1
+    },
+    {
+      "syllable": 8,
+      "text": "离",
+      "pos": 12.7445,
+      "score": 0.7,
+      "err_ms": 10.4,
+      "onset_err_ms": 0.0
+    },
+    {
+      "syllable": 9,
+      "text": "谱",
+      "pos": 12.9301,
+      "score": 0.954,
+      "err_ms": 74.8,
+      "onset_err_ms": 3.7
+    },
+    {
+      "syllable": 10,
+      "text": "了",
+      "pos": 13.2433,
+      "score": 0.972,
+      "err_ms": 11.6,
+      "onset_err_ms": 4.2
+    },
+    {
+      "syllable": 11,
+      "text": "吧",
+      "pos": 13.4896,
+      "score": 0.977,
+      "err_ms": 15.3,
+      "onset_err_ms": 0.1
+    },
+    {
+      "syllable": 8,
+      "text": "离",
+      "pos": 14.2445,
+      "score": 0.7,
+      "err_ms": 10.4,
+      "onset_err_ms": 0.0
+    },
+    {
+      "syllable": 9,
+      "text": "谱",
+      "pos": 14.4301,
+      "score": 0.954,
+      "err_ms": 74.8,
+      "onset_err_ms": 3.7
+    },
+    {
+      "syllable": 10,
+      "text": "了",
+      "pos": 14.9933,
+      "score": 0.708,
+      "err_ms": 11.6,
+      "onset_err_ms": 4.2
+    },
+    {
+      "syllable": 11,
+      "text": "吧",
+      "pos": 15.1146,
+      "score": 0.609,
+      "err_ms": 109.7,
+      "onset_err_ms": 124.9
+    },
+    {
+      "syllable": 11,
+      "text": "吧",
+      "pos": 15.2396,
+      "score": 0.622,
+      "err_ms": 15.3,
+      "onset_err_ms": 0.1
+    }
+  ],
+  "occurrence_count": 41,
+  "distinct_syllables": 12,
+  "aligned_frac_start": 0.512,
+  "aligned_frac_onset": 0.976,
+  "aligned_frac": 0.976,
+  "pass": true,
+  "other_files": [
+    "work/build_ytpmv.py",
+    "work/build.log",
+    "work/chars.png",
+    "work/contact.png",
+    "work/last.png",
+    "work/out_sheet.png",
+    "work/out_sheet2.png",
+    "work/plan.json",
+    "work/video.mp4",
+    "work/voice.wav",
+    "ytpmv.mp4"
+  ],
+  "candidates_checked": 1
+}

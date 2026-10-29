@@ -1,0 +1,194 @@
+{
+  "task": "stream_clips",
+  "source": "/Users/lishuyu/Codes/autocut/fixtures/media/stream_vod.mp4",
+  "output": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T6-haiku-2",
+  "checks": {
+    "exists": true,
+    "exactly_three_files": true,
+    "durations_ok": true,
+    "vertical_ok": true,
+    "all_matched_to_source": true,
+    "distinct_highlights": true
+  },
+  "reasons": [],
+  "clips": [
+    {
+      "file": "clip_1.mp4",
+      "exists": true,
+      "duration": 19.0,
+      "width": 1080,
+      "height": 1920,
+      "ratio": 0.5625,
+      "duration_ok": true,
+      "vertical_ok": true,
+      "has_audio": true,
+      "loudness": {
+        "lufs": -20.0,
+        "true_peak_dbfs": -2.8
+      },
+      "subtitles": {
+        "status": "burned_or_missing",
+        "where": null,
+        "file": null
+      },
+      "probes": [
+        {
+          "at": "head",
+          "best_score": 0.999,
+          "src_offsets": [
+            31.0
+          ]
+        },
+        {
+          "at": "mid",
+          "best_score": 1.0,
+          "src_offsets": [
+            31.0,
+            67.0,
+            58.0,
+            85.0
+          ]
+        },
+        {
+          "at": "tail",
+          "best_score": 1.0,
+          "src_offsets": [
+            31.0
+          ]
+        }
+      ],
+      "contiguous": true,
+      "src_start": 31.0,
+      "src_end": 50.0,
+      "covers_highlights": [
+        0
+      ],
+      "lead_in_s": [
+        2.0
+      ],
+      "overlaps_decoy": false
+    },
+    {
+      "file": "clip_2.mp4",
+      "exists": true,
+      "duration": 20.0,
+      "width": 1080,
+      "height": 1920,
+      "ratio": 0.5625,
+      "duration_ok": true,
+      "vertical_ok": true,
+      "has_audio": true,
+      "loudness": {
+        "lufs": -19.7,
+        "true_peak_dbfs": -2.7
+      },
+      "subtitles": {
+        "status": "burned_or_missing",
+        "where": null,
+        "file": null
+      },
+      "probes": [
+        {
+          "at": "head",
+          "best_score": 0.999,
+          "src_offsets": [
+            81.0
+          ]
+        },
+        {
+          "at": "mid",
+          "best_score": 0.999,
+          "src_offsets": [
+            81.0,
+            9.0,
+            45.0,
+            18.0
+          ]
+        },
+        {
+          "at": "tail",
+          "best_score": 1.0,
+          "src_offsets": [
+            81.0
+          ]
+        }
+      ],
+      "contiguous": true,
+      "src_start": 81.0,
+      "src_end": 101.0,
+      "covers_highlights": [
+        1
+      ],
+      "lead_in_s": [
+        2.0
+      ],
+      "overlaps_decoy": false
+    },
+    {
+      "file": "clip_3.mp4",
+      "exists": true,
+      "duration": 20.0,
+      "width": 1080,
+      "height": 1920,
+      "ratio": 0.5625,
+      "duration_ok": true,
+      "vertical_ok": true,
+      "has_audio": true,
+      "loudness": {
+        "lufs": -19.8,
+        "true_peak_dbfs": -2.8
+      },
+      "subtitles": {
+        "status": "burned_or_missing",
+        "where": null,
+        "file": null
+      },
+      "probes": [
+        {
+          "at": "head",
+          "best_score": 0.998,
+          "src_offsets": [
+            127.0
+          ]
+        },
+        {
+          "at": "mid",
+          "best_score": 1.0,
+          "src_offsets": [
+            127.0
+          ]
+        },
+        {
+          "at": "tail",
+          "best_score": 0.999,
+          "src_offsets": [
+            127.0
+          ]
+        }
+      ],
+      "contiguous": true,
+      "src_start": 127.0,
+      "src_end": 147.0,
+      "covers_highlights": [
+        2
+      ],
+      "lead_in_s": [
+        4.0
+      ],
+      "overlaps_decoy": false
+    }
+  ],
+  "extras": [],
+  "subtitles_status": [
+    "burned_or_missing",
+    "burned_or_missing",
+    "burned_or_missing"
+  ],
+  "pass": true,
+  "other_files": [
+    "clip_1.mp4",
+    "clip_2.mp4",
+    "clip_3.mp4"
+  ],
+  "candidates_checked": 1
+}

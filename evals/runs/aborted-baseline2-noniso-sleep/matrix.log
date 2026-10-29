@@ -1,0 +1,32 @@
+[18:12:07] T5-opus-1: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T5-opus-1, max-turns 80, timeout 1200)
+[18:12:07] T5-haiku-1: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T5-haiku-1, max-turns 80, timeout 1200)
+[18:12:07] T5-haiku-2: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T5-haiku-2, max-turns 80, timeout 1200)
+[18:12:07] T5-opus-2: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T5-opus-2, max-turns 80, timeout 1200)
+[18:13:26] T5-haiku-1: task done rc=0 in 79s
+[18:18:34] T5-haiku-1: debrief rc=0
+[18:18:35] T5-haiku-1: verify pass=true
+[18:18:35] T6-opus-1: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T6-opus-1, max-turns 80, timeout 1200)
+[18:52:01] T5-haiku-2: task done rc=0 in 2394s
+[18:52:12] T5-haiku-2: debrief rc=0
+[18:52:14] T5-haiku-2: verify pass=false
+[18:52:14] T6-haiku-1: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T6-haiku-1, max-turns 80, timeout 1200)
+[18:52:23] T5-opus-2: task done rc=0 in 2416s
+[19:45:36] T5-opus-2: debrief rc=0
+[19:45:46] T5-opus-2: verify pass=true
+[19:45:47] T6-opus-2: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T6-opus-2, max-turns 80, timeout 1200)
+[19:45:51] T5-opus-1: task done rc=0 in 5624s
+[19:46:22] T5-opus-1: debrief rc=0
+[19:46:26] T5-opus-1: verify pass=true
+[19:46:27] T6-haiku-2: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T6-haiku-2, max-turns 80, timeout 1200)
+evals/run_matrix.sh: line 14: 93740 Done                    for task in ${TASKS_LIST:-T1 T2 T3 T4};
+do
+    for n in $(seq 1 "$reps");
+    do
+        for model in opus haiku;
+        do
+            echo "$runset $arm $model $task $n";
+        done;
+    done;
+done
+     93741 Terminated: 15          | xargs -P "${P:-4}" -L 1 "$ROOT/evals/run_headless.sh"
+/Users/lishuyu/Codes/autocut/evals/run_headless.sh: line 86:  1883 Terminated: 15          ( cd "$sandbox" && "${clean_env[@]}" timeout "$task_timeout" claude -p "$prompt" --model "$model" --output-format stream-json --verbose --dangerously-skip-permissions --max-turns "$max_turns" ${ARM_CLAUDE_ARGS[@]+"${ARM_CLAUDE_ARGS[@]}"} < /dev/null > "$jsonl" 2> "$runs/$case_id.stderr" )

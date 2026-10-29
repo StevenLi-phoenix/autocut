@@ -1,0 +1,15 @@
+[22:43:48] T8-haiku-2: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T8-haiku-2, max-turns 80, timeout 1200)
+[22:43:48] T4-haiku-2: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline-2026-10-28-iso/T4-haiku-2, max-turns 60, timeout 900)
+[22:43:48] T6-haiku-2: start (sandbox /private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T6-haiku-2, max-turns 80, timeout 1200)
+[22:44:34] T4-haiku-2: task done rc=0 in 46s
+[22:44:40] T4-haiku-2: debrief rc=0
+[22:44:40] T4-haiku-2: verify pass=true
+[22:44:40] T4-haiku-2: quarantined 1 /tmp entries: talk_cut
+[22:45:24] T8-haiku-2: task done rc=0 in 96s
+[22:45:30] T8-haiku-2: debrief rc=0
+[22:45:31] T8-haiku-2: verify pass=true
+[22:45:31] T8-haiku-2: quarantined 1 /tmp entries: kbuild
+[22:48:54] T6-haiku-2: task done rc=0 in 306s
+[22:48:58] T6-haiku-2: debrief rc=0
+[22:49:03] T6-haiku-2: verify pass=false
+[22:49:03] T6-haiku-2: quarantined 1 /tmp entries: clipwork

@@ -1,0 +1,19 @@
+{
+  "runset": "baseline-2026-10-28",
+  "arm": "baseline",
+  "model": "opus",
+  "task": "T2",
+  "n": 2,
+  "session_id": "3d8d4638-7208-4d26-a010-fc2eca473349",
+  "task_rc": 0,
+  "debrief_rc": "0",
+  "wall_s": 250,
+  "claude_version": "2.1.303 (Claude Code)",
+  "claude_effort_env": "xhigh",
+  "sandbox": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline-2026-10-28/T2-opus-2",
+  "sandbox_files": [
+    "cut_silence.py",
+    "lecture_en_cut.mp4"
+  ],
+  "timed_out": false
+}

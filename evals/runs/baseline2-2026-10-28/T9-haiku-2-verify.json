@@ -1,0 +1,192 @@
+{
+  "task": "ytpmv",
+  "source": "/Users/lishuyu/Codes/autocut/fixtures/media/ytpmv",
+  "output": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T9-haiku-2/ytpmv.mp4",
+  "checks": {
+    "exists": true,
+    "probe_ok": true,
+    "has_video": true,
+    "has_audio": true,
+    "av_drift": 0.0,
+    "av_drift_ok": true,
+    "bgm_present": true,
+    "enough_occurrences": true,
+    "has_repeats": true,
+    "on_beat": false
+  },
+  "reasons": [
+    "音节对拍比例 46%（起点 31% / 能量起音 46%） < 70%（±50ms 内，拍点/半拍）"
+  ],
+  "output_info": {
+    "duration": 16.0,
+    "width": 640,
+    "height": 360,
+    "audio_streams": 1,
+    "subtitle_streams": 0
+  },
+  "loudness": {
+    "lufs": -16.0,
+    "true_peak_dbfs": -0.6
+  },
+  "bgm": {
+    "score": 0.9407,
+    "offset": -0.0001,
+    "windows": [
+      {
+        "win_start": 0.0,
+        "score": 0.9056,
+        "bgm_pos": 8.0,
+        "offset": 8.0
+      },
+      {
+        "win_start": 2.6,
+        "score": 0.9198,
+        "bgm_pos": 2.6,
+        "offset": 0.0
+      },
+      {
+        "win_start": 5.2,
+        "score": 0.8378,
+        "bgm_pos": 5.1999,
+        "offset": -0.0001
+      },
+      {
+        "win_start": 7.8,
+        "score": 0.9407,
+        "bgm_pos": 7.7999,
+        "offset": -0.0001
+      },
+      {
+        "win_start": 10.4,
+        "score": 0.456,
+        "bgm_pos": 2.4001,
+        "offset": -7.9999
+      },
+      {
+        "win_start": 13.0,
+        "score": 0.7931,
+        "bgm_pos": 13.0,
+        "offset": -0.0001
+      }
+    ],
+    "band": "low",
+    "score_full": 0.169,
+    "score_low": 0.9407
+  },
+  "occurrences": [
+    {
+      "syllable": 1,
+      "text": "真",
+      "pos": 0.9416,
+      "score": 0.823,
+      "err_ms": 58.5,
+      "onset_err_ms": 25.9
+    },
+    {
+      "syllable": 3,
+      "text": "会",
+      "pos": 1.5521,
+      "score": 0.663,
+      "err_ms": 52.0,
+      "onset_err_ms": 118.6
+    },
+    {
+      "syllable": 3,
+      "text": "会",
+      "pos": 1.9521,
+      "score": 0.603,
+      "err_ms": 48.0,
+      "onset_err_ms": 18.6
+    },
+    {
+      "syllable": 1,
+      "text": "真",
+      "pos": 4.9416,
+      "score": 0.823,
+      "err_ms": 58.5,
+      "onset_err_ms": 25.9
+    },
+    {
+      "syllable": 3,
+      "text": "会",
+      "pos": 5.2854,
+      "score": 0.653,
+      "err_ms": 35.3,
+      "onset_err_ms": 101.9
+    },
+    {
+      "syllable": 5,
+      "text": "这",
+      "pos": 5.8598,
+      "score": 0.675,
+      "err_ms": 109.7,
+      "onset_err_ms": 95.7
+    },
+    {
+      "syllable": 5,
+      "text": "这",
+      "pos": 5.9931,
+      "score": 0.616,
+      "err_ms": 7.0,
+      "onset_err_ms": 37.6
+    },
+    {
+      "syllable": 6,
+      "text": "也",
+      "pos": 6.1886,
+      "score": 0.65,
+      "err_ms": 61.5,
+      "onset_err_ms": 29.3
+    },
+    {
+      "syllable": 1,
+      "text": "真",
+      "pos": 13.0772,
+      "score": 0.728,
+      "err_ms": 77.1,
+      "onset_err_ms": 109.7
+    },
+    {
+      "syllable": 3,
+      "text": "会",
+      "pos": 13.2878,
+      "score": 0.607,
+      "err_ms": 37.7,
+      "onset_err_ms": 104.3
+    },
+    {
+      "syllable": 5,
+      "text": "这",
+      "pos": 13.5954,
+      "score": 0.613,
+      "err_ms": 95.3,
+      "onset_err_ms": 110.1
+    },
+    {
+      "syllable": 1,
+      "text": "真",
+      "pos": 15.3439,
+      "score": 0.828,
+      "err_ms": 93.8,
+      "onset_err_ms": 123.6
+    },
+    {
+      "syllable": 3,
+      "text": "会",
+      "pos": 15.6877,
+      "score": 0.662,
+      "err_ms": 62.4,
+      "onset_err_ms": 4.2
+    }
+  ],
+  "occurrence_count": 13,
+  "distinct_syllables": 4,
+  "aligned_frac_start": 0.308,
+  "aligned_frac_onset": 0.462,
+  "aligned_frac": 0.462,
+  "pass": false,
+  "other_files": [
+    "ytpmv.mp4"
+  ],
+  "candidates_checked": 1
+}

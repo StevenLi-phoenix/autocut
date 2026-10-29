@@ -1,0 +1,25 @@
+{
+  "runset": "baseline-2026-10-28-iso",
+  "arm": "baseline",
+  "model": "opus",
+  "task": "T4",
+  "n": 2,
+  "session_id": "3971f290-4637-4f5e-9bae-7fada6e344c8",
+  "task_rc": 0,
+  "debrief_rc": "0",
+  "wall_s": 204,
+  "claude_version": "2.1.303 (Claude Code)",
+  "claude_effort_env": "xhigh",
+  "sandbox": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline-2026-10-28-iso/T4-opus-2",
+  "new_files": [
+    "scripts/autocut.py",
+    "talk_zh_cutlist.md",
+    "talk_zh_roughcut.edl",
+    "talk_zh_roughcut.fcpxml",
+    "tests/test_autocut.py"
+  ],
+  "max_turns": 60,
+  "timeout_s": 900,
+  "isolated": true,
+  "timed_out": false
+}

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.10">
+  <resources>
+    <format id="r1" name="FFVideoFormat640x360p30" frameDuration="1/30s" width="640" height="360"/>
+    <asset id="r2" name="talk_zh.mp4" start="0s" duration="1222/30s" hasVideo="1" format="r1" hasAudio="1" audioSources="1" audioChannels="1" audioRate="48000">
+      <media-rep kind="original-media" src="file://localhost/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline-2026-10-28-iso/T4-haiku-2/talk_zh.mp4"/>
+    </asset>
+  </resources>
+  <library>
+    <event name="talk_zh">
+      <project name="talk_zh 粗剪">
+        <sequence format="r1" duration="972/30s" tcStart="0s" tcFormat="NDF" audioLayout="mono" audioRate="48k">
+          <spine>
+        <asset-clip ref="r2" offset="0/30s" name="talk_zh.mp4" start="0/30s" duration="284/30s" format="r1" tcFormat="NDF"/>
+        <asset-clip ref="r2" offset="284/30s" name="talk_zh.mp4" start="329/30s" duration="119/30s" format="r1" tcFormat="NDF"/>
+        <asset-clip ref="r2" offset="403/30s" name="talk_zh.mp4" start="454/30s" duration="140/30s" format="r1" tcFormat="NDF"/>
+        <asset-clip ref="r2" offset="543/30s" name="talk_zh.mp4" start="660/30s" duration="158/30s" format="r1" tcFormat="NDF"/>
+        <asset-clip ref="r2" offset="701/30s" name="talk_zh.mp4" start="831/30s" duration="119/30s" format="r1" tcFormat="NDF"/>
+        <asset-clip ref="r2" offset="820/30s" name="talk_zh.mp4" start="1040/30s" duration="152/30s" format="r1" tcFormat="NDF"/>
+          </spine>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>

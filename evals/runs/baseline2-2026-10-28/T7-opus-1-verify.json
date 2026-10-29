@@ -1,0 +1,163 @@
+{
+  "task": "montage",
+  "source": "/Users/lishuyu/Codes/autocut/fixtures/media/montage",
+  "output": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T7-opus-1/montage.mp4",
+  "checks": {
+    "exists": true,
+    "probe_ok": true,
+    "has_video": true,
+    "has_audio": true,
+    "av_drift": 0.0,
+    "av_drift_ok": true,
+    "duration_ok": true,
+    "bgm_present": true,
+    "enough_cuts": true,
+    "cuts_on_beat": true
+  },
+  "reasons": [],
+  "output_info": {
+    "duration": 15.0,
+    "width": 640,
+    "height": 360,
+    "audio_streams": 1,
+    "subtitle_streams": 0
+  },
+  "loudness": {
+    "lufs": -21.0,
+    "true_peak_dbfs": -1.0
+  },
+  "bgm": {
+    "score": 0.9999,
+    "offset": 0.0,
+    "windows": [
+      {
+        "win_start": 0.0,
+        "score": 0.9999,
+        "bgm_pos": 0.0,
+        "offset": 0.0
+      },
+      {
+        "win_start": 2.4,
+        "score": 0.9999,
+        "bgm_pos": 18.4,
+        "offset": 16.0
+      },
+      {
+        "win_start": 4.8,
+        "score": 0.9999,
+        "bgm_pos": 20.8,
+        "offset": 16.0
+      },
+      {
+        "win_start": 7.2,
+        "score": 0.9999,
+        "bgm_pos": 15.2,
+        "offset": 8.0
+      },
+      {
+        "win_start": 9.6,
+        "score": 0.9999,
+        "bgm_pos": 17.6,
+        "offset": 8.0
+      },
+      {
+        "win_start": 12.0,
+        "score": 0.9942,
+        "bgm_pos": 20.0,
+        "offset": 8.0
+      }
+    ],
+    "band": "low",
+    "score_full": 0.9995,
+    "score_low": 0.9999
+  },
+  "cuts": [
+    {
+      "cut": 2.0,
+      "bgm_time": 2.0,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 3.0,
+      "bgm_time": 3.0,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 5.0,
+      "bgm_time": 5.0,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 6.0,
+      "bgm_time": 6.0,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 7.0,
+      "bgm_time": 7.0,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 8.0,
+      "bgm_time": 8.0,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 8.5,
+      "bgm_time": 8.5,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 9.5,
+      "bgm_time": 9.5,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 10.0,
+      "bgm_time": 10.0,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 10.5,
+      "bgm_time": 10.5,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 11.0,
+      "bgm_time": 11.0,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 11.5,
+      "bgm_time": 11.5,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 12.5,
+      "bgm_time": 12.5,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 13.0,
+      "bgm_time": 13.0,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 13.5,
+      "bgm_time": 13.5,
+      "err_ms": 0.0
+    },
+    {
+      "cut": 14.0,
+      "bgm_time": 14.0,
+      "err_ms": 0.0
+    }
+  ],
+  "cut_aligned_frac": 1.0,
+  "pass": true,
+  "other_files": [
+    "montage_edl.json",
+    "montage.mp4"
+  ],
+  "candidates_checked": 1
+}

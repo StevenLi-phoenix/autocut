@@ -1,0 +1,22 @@
+{
+  "runset": "baseline2-2026-10-28",
+  "arm": "baseline",
+  "model": "haiku",
+  "task": "T8",
+  "n": 2,
+  "session_id": "06bf4527-7e7e-491b-96c1-e6f2d8f545c9",
+  "task_rc": 0,
+  "debrief_rc": "0",
+  "wall_s": 96,
+  "claude_version": "2.1.303 (Claude Code)",
+  "claude_effort_env": "xhigh",
+  "sandbox": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T8-haiku-2",
+  "new_files": [
+    "knowledge.mp4"
+  ],
+  "max_turns": 80,
+  "timeout_s": 1200,
+  "isolated": true,
+  "signal_isolated": true,
+  "timed_out": false
+}

@@ -1,0 +1,8 @@
+{
+ "T7-haiku-1": "素材目录 montage/ 里带着别的会话在 fixtures 里生成的 .autocut-cache（beats.json、各片段 cuts.json），agent 读了它",
+ "T7-haiku-2": "同上（montage/.autocut-cache）",
+ "T7-opus-2": "同上（montage/.autocut-cache）",
+ "T9-haiku-1": "素材目录 ytpmv/ 里带着 .autocut-cache（含 whisper 词级转写等），agent 读了它；另外它跑了宽泛的 pkill -f \"ffmpeg -hide_banner -loglevel error\"",
+ "T9-haiku-2": "同上（ytpmv/.autocut-cache）",
+ "T9-opus-2": "同上（ytpmv/.autocut-cache）；另外它跑了 pkill -f 'find / -name ggml'"
+}

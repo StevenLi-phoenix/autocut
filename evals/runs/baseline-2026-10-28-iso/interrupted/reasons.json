@@ -1,0 +1,3 @@
+{
+ "T4-haiku-2": "21:50:16 另一个会话的 pkill（模式 -n/-l）波及：本 case 的时间窗 21:46:36–21:50:38 包含该时刻，外层 timeout/sandbox-exec 包装进程（命令行含 -lishuyu）被杀；该时刻没有失败的调用，agent 自己跑完。按要求标 interrupted 并重跑"
+}

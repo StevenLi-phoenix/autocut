@@ -1,0 +1,232 @@
+{
+  "task": "noisy_silence",
+  "source": "/Users/lishuyu/Codes/autocut/fixtures/media/lecture_en.mp4",
+  "output": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline-2026-10-28/T2-opus-2/lecture_en_cut.mp4",
+  "checks": {
+    "exists": true,
+    "probe_ok": true,
+    "has_video": true,
+    "has_audio": true,
+    "av_drift": 0.01,
+    "av_drift_ok": true,
+    "dead_air_count": 0,
+    "choppy_count": 0,
+    "all_speech_intact": true,
+    "no_clipped_speech": true,
+    "no_dead_air": true,
+    "choppy_ok": true,
+    "edges_trimmed": true
+  },
+  "reasons": [],
+  "durations": {
+    "source": 35.3441,
+    "output": 23.0767,
+    "removed": 12.2675
+  },
+  "segments": [
+    {
+      "idx": 0,
+      "start": 1.5,
+      "end": 3.2299,
+      "dur": 1.7299,
+      "text": "Okay, let's get started.",
+      "tag": null,
+      "score": 0.9993,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 0.15,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 1,
+      "start": 5.4299,
+      "end": 8.8319,
+      "dur": 3.402,
+      "text": "Today we cover the gulf of execution and the gulf of evaluation.",
+      "tag": null,
+      "score": 0.9949,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 2.1066,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 2,
+      "start": 9.2819,
+      "end": 9.5874,
+      "dur": 0.3055,
+      "text": "Um",
+      "tag": "filler",
+      "score": 0.9916,
+      "status": "intact",
+      "absent_below": 0.3399,
+      "out_start": 5.7586,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 3,
+      "start": 10.0874,
+      "end": 11.8933,
+      "dur": 1.8059,
+      "text": "Both ideas come from Don Norman.",
+      "tag": null,
+      "score": 0.9941,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 6.3107,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 4,
+      "start": 15.8933,
+      "end": 18.175,
+      "dur": 2.2817,
+      "text": "The gulf of execution is the gap between",
+      "tag": "retake",
+      "score": 0.9946,
+      "status": "intact",
+      "absent_below": 0.3122,
+      "out_start": 8.3466,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 5,
+      "start": 19.075,
+      "end": 20.9259,
+      "dur": 1.8509,
+      "text": "sorry, let me say that again.",
+      "tag": "retake",
+      "score": 0.993,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 10.7817,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 6,
+      "start": 21.6259,
+      "end": 26.0724,
+      "dur": 4.4465,
+      "text": "The gulf of execution is the gap between what you want and what the interface lets you do.",
+      "tag": null,
+      "score": 0.9954,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 12.8726,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 7,
+      "start": 26.4224,
+      "end": 30.8874,
+      "dur": 4.465,
+      "text": "The gulf of evaluation is the gap between what the system shows and what you understand.",
+      "tag": null,
+      "score": 0.9951,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 17.6691,
+      "coverage": 1.0,
+      "clipped": false
+    },
+    {
+      "idx": 8,
+      "start": 33.6874,
+      "end": 34.3441,
+      "dur": 0.6567,
+      "text": "Questions?",
+      "tag": null,
+      "score": 0.9934,
+      "status": "intact",
+      "absent_below": 0.3,
+      "out_start": 22.3841,
+      "coverage": 1.0,
+      "clipped": false
+    }
+  ],
+  "gaps": [
+    {
+      "between": [
+        0,
+        1
+      ],
+      "at": 1.88,
+      "gap": 0.227
+    },
+    {
+      "between": [
+        1,
+        2
+      ],
+      "at": 5.509,
+      "gap": 0.25
+    },
+    {
+      "between": [
+        2,
+        3
+      ],
+      "at": 6.064,
+      "gap": 0.247
+    },
+    {
+      "between": [
+        3,
+        4
+      ],
+      "at": 8.117,
+      "gap": 0.23
+    },
+    {
+      "between": [
+        4,
+        5
+      ],
+      "at": 10.628,
+      "gap": 0.153
+    },
+    {
+      "between": [
+        5,
+        6
+      ],
+      "at": 12.633,
+      "gap": 0.24
+    },
+    {
+      "between": [
+        6,
+        7
+      ],
+      "at": 17.319,
+      "gap": 0.35
+    },
+    {
+      "between": [
+        7,
+        8
+      ],
+      "at": 22.134,
+      "gap": 0.25
+    }
+  ],
+  "dead_air": [],
+  "choppy": [],
+  "edge_gaps": {
+    "head": 0.15,
+    "tail": 0.036
+  },
+  "pass": true,
+  "other_files": [
+    "cut_silence.py",
+    "lecture_en_cut.mp4"
+  ],
+  "candidates_checked": 1
+}

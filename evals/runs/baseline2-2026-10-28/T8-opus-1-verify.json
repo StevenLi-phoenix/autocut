@@ -1,0 +1,100 @@
+{
+  "task": "knowledge",
+  "source": "/Users/lishuyu/Codes/autocut/fixtures/media/knowledge",
+  "output": "/private/tmp/claude-501/-Users-lishuyu-Codes-autocut/457cba72-f891-417a-bcd7-e9e176d74173/scratchpad/evalwork/baseline2-2026-10-28/T8-opus-1/knowledge.mp4",
+  "checks": {
+    "exists": true,
+    "probe_ok": true,
+    "has_video": true,
+    "has_audio": true,
+    "av_drift": 0.008,
+    "av_drift_ok": true,
+    "landscape": true,
+    "duration_ok": true,
+    "has_speech": true,
+    "images_ok": true
+  },
+  "reasons": [],
+  "output_info": {
+    "duration": 38.1,
+    "width": 1920,
+    "height": 1080,
+    "audio_streams": 1,
+    "subtitle_streams": 0
+  },
+  "loudness": {
+    "lufs": -15.9,
+    "true_peak_dbfs": -1.5
+  },
+  "duration_bounds": [
+    23.03,
+    52.64
+  ],
+  "nonsilent_frac": 0.736,
+  "images": [
+    {
+      "image": "img1.png",
+      "best_mse": 0.00031,
+      "used": true,
+      "seconds_shown": 15,
+      "first_at_s": 0
+    },
+    {
+      "image": "img2.png",
+      "best_mse": 0.00016,
+      "used": true,
+      "seconds_shown": 12,
+      "first_at_s": 15
+    },
+    {
+      "image": "img3.png",
+      "best_mse": 0.00108,
+      "used": true,
+      "seconds_shown": 10,
+      "first_at_s": 27
+    }
+  ],
+  "images_used": 3,
+  "subtitles": {
+    "status": "burned_or_missing",
+    "where": null,
+    "file": null,
+    "script_char_overlap": 0.0
+  },
+  "pass": true,
+  "other_files": [
+    "build/.venv/.gitignore",
+    "build/.venv/bin/activate",
+    "build/.venv/bin/activate_this.py",
+    "build/.venv/bin/activate.bat",
+    "build/.venv/bin/activate.csh",
+    "build/.venv/bin/activate.fish",
+    "build/.venv/bin/activate.nu",
+    "build/.venv/bin/activate.ps1",
+    "build/.venv/bin/activate.xsh",
+    "build/.venv/bin/deactivate.bat",
+    "build/.venv/bin/pydoc.bat",
+    "build/.venv/CACHEDIR.TAG",
+    "build/.venv/pyvenv.cfg",
+    "build/make_video.py",
+    "build/work/s00_0.wav",
+    "build/work/s01_0.wav",
+    "build/work/s01_1.wav",
+    "build/work/s02_0.wav",
+    "build/work/s02_1.wav",
+    "build/work/s03_0.wav",
+    "build/work/s03_1.wav",
+    "build/work/s03_2.wav",
+    "build/work/s04_0.wav",
+    "build/work/s04_1.wav",
+    "build/work/s05_0.wav",
+    "build/work/s05_1.wav",
+    "build/work/s05_2.wav",
+    "build/work/subs.ass",
+    "build/work/timeline.json",
+    "build/work/title.png",
+    "build/work/voice.wav",
+    "knowledge.mp4"
+  ],
+  "candidates_checked": 1
+}

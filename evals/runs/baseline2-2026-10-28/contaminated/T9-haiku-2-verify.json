@@ -1,0 +1,14 @@
+{
+  "task": "ytpmv",
+  "pass": false,
+  "fail": "no_output",
+  "checks": {
+    "exists": false
+  },
+  "reasons": [
+    "no_output: 沙盒里没有找到产物"
+  ],
+  "other_files": [
+    "ytpmv/ytpmv.mp4"
+  ]
+}
