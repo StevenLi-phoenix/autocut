@@ -71,6 +71,16 @@ def test_game_ideal_passes(game_ideal):
     assert res["loudness"]["lufs"] is not None
 
 
+def test_game_boring_residual_tolerates_one_frame_but_not_more(work):
+    src = MEDIA / "game_commentary.mp4"
+    ok = M.render_ranges(src, work / "game_keep1_02.mp4", game_ranges(1.02))
+    assert run("game_commentary", "game_commentary", src, ok)["pass"]
+    bad = M.render_ranges(src, work / "game_keep1_3.mp4", game_ranges(1.3))
+    res = run("game_commentary", "game_commentary", src, bad)
+    assert not res["pass"] and not res["checks"]["boring_residual_ok"]
+    assert all(1.2 < g["kept"] < 1.4 for g in res["gaps"] if g["tag"] == "boring")
+
+
 def test_game_uncut_fails_on_boring_residual():
     src = MEDIA / "game_commentary.mp4"
     res = run("game_commentary", "game_commentary", src, src)
