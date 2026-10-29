@@ -164,6 +164,17 @@ def test_track_reframe_writes_keyframes_inside_frame(vod: Path, media: Path, tmp
 
 
 @pytest.mark.integration
+def test_does_not_pad_selection_when_too_few_real_highlights(vod: Path, media: Path, tmp_path: Path) -> None:
+    """要的条数比真高光多时宁缺毋滥：响度补位的弱候选只列出、不自动选，notes 说明还差几条、怎么手动补。"""
+    plan = H.build([vod], out=tmp_path / "v.autocut.json", chat=media / "stream_vod.chat.jsonl", n=6)
+    chosen = [o for o in plan.outputs if o.selected]
+    assert 0 < len(chosen) < 6
+    assert all(not any("补位" in r for r in o.reasons) for o in chosen)
+    note = " ".join(plan.notes)
+    assert f"只找到 {len(chosen)} 条" in note and "--select" in note
+
+
+@pytest.mark.integration
 def test_n_and_candidates_options(vod: Path, media: Path, tmp_path: Path) -> None:
     plan = H.build([vod], out=tmp_path / "v.autocut.json", chat=media / "stream_vod.chat.jsonl", n=2, candidates=3)
     assert len(plan.outputs) <= 3 and sum(o.selected for o in plan.outputs) == 2

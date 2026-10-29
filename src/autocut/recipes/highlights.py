@@ -108,6 +108,7 @@ class Cluster:
     keywords: list[tuple[float, str]] = field(default_factory=list)
     cuts: int = 0
     audio_driven: bool = False
+    padded: bool = False  # 真高光不够 n 条时用响度补位的弱候选：只列出，不自动选
     spam: bool = False
     score: float = 0.0
     raw_score: float = 0.0
@@ -679,7 +680,7 @@ def build(
         for t, g in top_peaks(grid, gain, n=(n - len(real)) * 3, min_distance=20.0):
             if g < 3.0 or any(a <= t <= b for a, b in have):
                 continue
-            c = Cluster(t0=t - 1, t1=t + 1, a0=t - 1, a1=t + 1, peak=t, gain=float(g), audio_driven=True)
+            c = Cluster(t0=t - 1, t1=t + 1, a0=t - 1, a1=t + 1, peak=t, gain=float(g), audio_driven=True, padded=True)
             c.cuts = sum(1 for ct in cuts if t - 3 <= ct <= t + 3)
             c.raw_score = c.score = 100.0 * noisy_or([0.7 * min(max((g - LOUD_FLOOR_DB) / (LOUD_FULL_DB - LOUD_FLOOR_DB), 0.0), 1.0), 0.35 * min(c.cuts / 2.0, 1.0)]) or 2.0
             clusters.append(c)
@@ -703,10 +704,14 @@ def build(
         fitted.append((c, clip))
     fitted = fitted[:cap]
 
-    chosen = [i for i, (c, _) in enumerate(fitted) if not c.spam][:n]
+    # 宁缺毋滥：补位的弱候选不自动选（凑数的切片发出去只会拉低账号的完播率），交给人决定
+    chosen = [i for i, (c, _) in enumerate(fitted) if not c.spam and not c.padded][:n]
     if len(chosen) < n:
-        notes.append(f"只找到 {len(chosen)} 条像样的高光（要 {n} 条）：整段素材里没有更多明显的音量峰 / 弹幕爆发 / 关键词；"
-                     "可以放宽 length，或手动在审阅页补一条")
+        weak = [f"clip_{i + 1}" for i, (c, _) in enumerate(fitted) if c.padded]
+        notes.append(f"只找到 {len(chosen)} 条像样的高光（要 {n} 条）：整段素材里没有更多明显的音量峰 / 弹幕爆发 / 关键词，没有拿弱候选凑数。"
+                     + (f"列出了 {len(weak)} 条响度补位的弱候选（{'、'.join(weak)}），确认可用就 `autocut set <方案> {weak[0]} --select` 或在审阅页勾选；"
+                        if weak else "")
+                     + "也可以放宽 length，或在审阅页手动补一条")
 
     # ---- 方案
     size = aspect_size(aspect)
@@ -732,6 +737,8 @@ def build(
                     + ("，声音和画面都没有明显变化" if not c.audio_driven and not c.cuts else "")
                     + "，判为抽奖刷屏，没选"
                 )
+            elif c.padded:
+                reasons.append("响度补位：只有音量比基线高，没有弹幕或关键词佐证，把握度低，没自动选")
             else:
                 reasons.append(f"排名第 {rank}，只取前 {n} 条，没选")
         segs: list[Segment] = []
@@ -746,6 +753,8 @@ def build(
             conf_main = min(conf_main, 0.6)  # 只有弹幕：没有声音佐证
         if uncertain_why:
             conf_main = min(conf_main, 0.6)
+        if c.padded:
+            conf_main = min(conf_main, 0.5)
         ev = {k: v2 for k, v2 in {
             "loud_gain_db": round(c.gain, 1) if c.gain else None,
             "chat_ratio": round(c.ratio, 1) if c.ratio else None,
