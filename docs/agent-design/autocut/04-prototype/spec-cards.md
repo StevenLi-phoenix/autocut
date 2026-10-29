@@ -36,7 +36,7 @@
 | `narrate` | 文稿 + 配图 → 配音、字幕、配图的知识视频 → 方案 | 写方案 |
 | `show` | 读方案：摘要，或者分页列出片段（可筛选拿不准的） | 否 |
 | `set` | 改方案：把片段改成剪或留，挪边界，选或取消候选 | 写方案 |
-| `review` | 打开本地审阅页（人用；agent 通常不调用，只告诉人这条命令） | 写方案（人改） |
+| `review` | 打开本地审阅页（人用）。非 TTY 时必须加 `--detach`（后台启动，返回 url 和 pid），否则立即失败（`would_block`）：这个命令会一直运行，agent 应当把它交给用户 | 写方案（人改） |
 | `render` | 按方案出片 | 写成片 |
 | `export` | 导出剪辑软件工程或字幕：fcpxml、xmeml、edl、srt、markers | 写工程 |
 | `check` | 发布前体检：留存风险信号，每项附时间点和修法；不是爆款保证 | 可选存档 |
@@ -184,7 +184,7 @@
 
 **Inputs**：`PLAN` · `--format fcpxml|xmeml|edl|srt|markers`（必填）· `--output ID` · `--cuts markers|disabled|none` · `-o PATH` · `--force`
 
-**Output**：`{"ok": true, "command": "export", "path": "talk.main.fcpxml", "format": "fcpxml", "verified_in_nle": false, "limits": ["叠加层和 ducking 不导出"], "say": "已生成 Final Cut / Resolve 工程，结构已自检，还没在剪辑软件里打开过"}`
+**Output**：`{"ok": true, "command": "export", "path": "talk.main.fcpxml", "format": "fcpxml", "verified_in_nle": false, "limits": ["叠加层和 ducking 不导出"], "tell_user": "已生成 Final Cut / Resolve 工程，结构已自检，还没在剪辑软件里打开过"}`
 
 **Errors**：格式名不对 → 2（列出可选项）
 
@@ -245,11 +245,14 @@
 | A-1 / E-2：找不到"谁在什么时候说了什么"的来源，只能扫盘找 ASR | 12/12 个语义任务扫过盘；5/36 执行了别的项目 venv 里的代码 | 新增 `transcribe`；`doctor` 和 skill 写明"需要转写就用它，不要自己找模型"；缺模型时退出码 4，附具体修法，不让 agent 去搜 |
 | A-3 / E-1：主观词没有判据，agent 硬凑数量 | T6 haiku 0/2，选了抽奖段；H5 测凑数 | highlights 宁缺毋滥：补位的弱候选只列出、不自动选，notes 写"只找到 k 条（要 n 条）"和手动选的命令；每个候选都附理由 |
 | B-1 / B-2：没有独立于生成过程的验证，只能拿必然成立的代理量宣布成功 | 35/36 没听过成片；T9 的"可整除 ≠ 在拍上" | render 出片后**独立核验**：重新测量成片的时长、音画漂移、响度，并在成片上重新检测语音，检查每个接缝是否落在说话中间（`verify.joints_mid_speech`）。核验不过就写进 warnings，同时 `ok` 仍为 true、`verified` 为 false |
-| B-3：没在剪辑软件里打开，却声称"能导入" | T4 8/8；D4 | export 的 JSON 带 `"verified_in_nle": false` 和一句给用户的说法："已生成，结构已自检，还没在剪辑软件里打开过" |
+| B-3：没在剪辑软件里打开，却声称"能导入" | T4 8/8；D4 | export 的 JSON 带 `"verified_in_nle": false` 和 `tell_user`（给用户转述的一句话）："已生成，结构已自检，还没在剪辑软件里打开过" |
 | D-1：决定不落盘，委托人想复核只能整条重看 | haiku 16/18 只留下了成片 | 方案文件本身就是审计记录（每刀都有 reason、confidence、detail）；render 默认把成片写在方案旁边；skill 要求 agent 在最后回复里给出方案路径 |
 | C-1 / C-3：原始工具的反馈要靠猜，空输出有四种含义 | B36 | 每个命令都返回显式状态；结果为空时一律附 `notice`，例如"0 处拿不准：全部有把握"，不返回空列表了事 |
 | D-3：按模式 pkill | 4 个 transcript | 长命令（render、transcribe）开始时向 stderr 写 `pid=N（取消：kill N）`；收到 SIGTERM 时停掉自己的 ffmpeg 子进程，并删掉写了一半的文件；skill 写明"取消就按 PID kill" |
 | 成本守门 | haiku T1/T2 每个 $0.01–0.03、4–16 个调用 | 常见流程控制在 2–3 次调用：`cut` → `render`（→ `check`）；skill 描述 ≤ 120 字 |
+
+### v1 → v1.1（纸面原型，见 `paper-prototype.md` P1–P12）
+`tell_user` 替换 `say`；`review` 非 TTY 时必须 `--detach`；配方遇到已有方案时不加 `--force` 就失败（`plan_exists`）；`show --around` 支持 m:ss，默认按成片时间；help 写明 pace 各档秒数、格式和软件的对应、uncertain 阈值 0.75、render 的核验项；取消时删掉写了一半的文件。
 
 ## 待验证（纸面原型和 eval 要回答的）
 1. P2（haiku）只看 `--help` 和 skill 描述，能不能选对配方、在交给人之前用 `show --filter uncertain` 自查，而不是直接读整个方案 JSON？
