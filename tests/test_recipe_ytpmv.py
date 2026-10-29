@@ -9,8 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from autocut.analysis import SR, Media
-from autocut.audio import frame_db
+from autocut.analysis import Media
 from autocut.plan import Plan
 from autocut.recipes import ytpmv as Y
 from autocut.recipes._common import RecipeError
