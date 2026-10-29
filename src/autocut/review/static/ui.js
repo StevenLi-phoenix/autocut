@@ -24,6 +24,12 @@ export function append(el, children) {
   return el;
 }
 
+/** 清空 el 再放入 children；和 el.replaceChildren(...) 的区别是 false/null 会被跳过（原生的会把它们变成 "false" 文字）。 */
+export function fill(el, ...children) {
+  el.replaceChildren();
+  return append(el, children);
+}
+
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 

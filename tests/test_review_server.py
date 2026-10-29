@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from autocut.plan import Captions, Output, Plan, Segment, Source
-from autocut.review.server import ReviewServer, make_server, parse_range
+from autocut.review.server import Job, ReviewServer, _parse_progress, make_server, parse_range
 
 pytestmark = pytest.mark.integration
 
@@ -431,7 +431,14 @@ def test_check_and_export_adapters(srv: ReviewServer, monkeypatch: pytest.Monkey
 
     _fake(monkeypatch, "export", export=bad_export)
     status, r = jcall(srv, "POST", "/api/export", {"format": "srt"})
-    assert status == 500 and "没有字幕可导出" in r["error"]
+    assert status == 400 and "没有字幕可导出" in r["error"]  # ValueError：说明已经具体，原样给用户
+
+    def crash(plan, fmt):
+        raise RuntimeError("磁盘写满了")
+
+    _fake(monkeypatch, "export", export=crash)
+    status, r = jcall(srv, "POST", "/api/export", {"format": "srt"})
+    assert status == 500 and "磁盘写满了" in r["error"]
 
 
 # ---------- 安全 / 静态文件 ----------
@@ -496,3 +503,72 @@ def test_move_boundary_golden_matches_python() -> None:
             assert exp == {"error": str(e)}, c
         else:
             assert exp == {"segments": [[s.start, s.end] for s in plan.outputs[0].segments]}, c
+
+
+# ---------- 进度折算、文字稿缓存、真实的出片/导出模块 ----------
+
+
+@pytest.mark.unit
+def test_job_progress_maps_render_stages_over_multiple_outputs() -> None:
+    """render 的 fraction 是“当前输出”的 0–1，每个输出都从 prepare 重来；整体进度必须单调不减、最终到 1。"""
+    job = Job("render")
+    job.total = 2
+    seen: list[float] = []
+    for _ in range(2):
+        for stage, fracs in (("prepare", [0.0]), ("measure", [0.0, 1.0]), ("encode", [0.0, 0.5, 1.0]), ("verify", [0.0]), ("done", [1.0])):
+            for f in fracs:
+                job.update(stage, f)
+                seen.append(job.fraction)
+    assert seen == sorted(seen)
+    assert job.index == 2 and 0.99 <= seen[-1] <= 1.0
+    assert "2/2" in job.stage or job.stage == "完成（2/2）"
+    mid = Job("render")
+    mid.total = 2
+    for stage, f in (("prepare", 0.0), ("encode", 1.0), ("done", 1.0)):
+        mid.update(stage, f)
+    assert 0.45 < mid.fraction < 0.55  # 第一个输出完成 → 约一半
+
+
+@pytest.mark.unit
+def test_parse_progress_accepts_several_shapes() -> None:
+    assert _parse_progress(("encode", 0.4), {}) == ("encode", 0.4)
+    assert _parse_progress((0.25,), {}) == (None, 0.25)
+    assert _parse_progress(({"stage": "x", "percent": 50},), {}) == ("x", 0.5)
+    assert _parse_progress((), {"stage": "y", "fraction": 7}) == ("y", 1.0)  # 夹在 0–1
+
+
+def test_words_found_in_analysis_cache_when_plan_has_no_words_field(plan_path: Path, tmp_path: Path) -> None:
+    from autocut.analysis import Media
+
+    raw = json.loads(plan_path.read_text())
+    del raw["sources"]["main"]["words"]
+    plan_path.write_text(json.dumps(raw))
+    media = Media(TALK)
+    media.cache_dir.mkdir(parents=True, exist_ok=True)
+    (media.cache_dir / "words-auto-tNone-test.json").write_text(json.dumps([{"text": "缓存里的词", "start": 0.1, "end": 0.5, "p": 0.9}], ensure_ascii=False))
+    with make_server(plan_path) as s:
+        status, d = jcall(s, "GET", "/api/words/main")
+        assert status == 200 and d["words"][0]["text"] == "缓存里的词"
+        assert jcall(s, "GET", "/api/plan")[1]["sources"]["main"]["has_words"] is True
+
+
+def test_real_render_and_export_modules(srv: ReviewServer, tmp_path: Path) -> None:
+    """不用假模块：走 autocut.render / autocut.export 的真实签名，确认适配层和进度、结果形状都对得上。"""
+    pytest.importorskip("autocut.render")
+    pytest.importorskip("autocut.export")
+    status, r = jcall(srv, "POST", "/api/render", {})
+    assert status == 202
+    j = _wait_job(srv, r["job"], timeout=120)
+    assert j["status"] == "done", j
+    res = j["result"][0]
+    assert res["output_id"] == "main" and res["path"].endswith(".mp4") and Path(res["path"]).exists()
+    assert res["duration"] and abs(res["duration"] - res["expected_duration"]) < 0.1
+    assert "filter_graph" not in res and "command" not in res  # 排错用的长字段不发给页面
+    assert j["fraction"] == 1.0 and j["total"] == 1
+    assert res["path"] in srv.known_files
+
+    status, r = jcall(srv, "POST", "/api/export", {"format": "edl", "output_id": "main"})
+    assert status == 200 and r["paths"] and Path(r["paths"][0]).suffix == ".edl" and Path(r["paths"][0]).exists()
+    # 导出模块自己的 ValueError（这份方案没有文字稿 → 导不了 srt）原样变成 400
+    status, r = jcall(srv, "POST", "/api/export", {"format": "srt"})
+    assert status in (200, 400)

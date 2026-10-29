@@ -215,9 +215,9 @@ export class Transcript {
     const meta = [];
     if (cut) meta.push(h("span", { class: "tag tag-cut" }, GLYPH.cut, " 剪掉"));
     if (unc) meta.push(h("span", { class: "tag tag-warn" }, GLYPH.warn, " 拿不准"));
-    if (!plain) meta.push(h("span", { class: "reason" }, REASONS[seg.reason] ?? seg.reason));
+    if (!plain && hasText) meta.push(h("span", { class: "reason" }, REASONS[seg.reason] ?? seg.reason)); // 没有文字时，上面那行标签已经是理由
     if ((cut || unc) && seg.confidence < 1) meta.push(h("span", { class: "mono conf", title: "机器对这个决定的把握度" }, `${pct}%`));
-    if (seg.detail) meta.push(h("span", { class: "detail" }, seg.detail));
+    if (seg.detail && !plain) meta.push(h("span", { class: "detail" }, seg.detail)); // 普通说话的 detail（“说话 0.76s”）只是噪声
     if (seg.locked) meta.push(h("span", { class: "tag tag-lock" }, GLYPH.lock, " 已锁定"));
     if (seg.evidence?.edited) meta.push(h("span", { class: "tag tag-edit" }, "已改"));
     const metaEl = meta.length ? h("p", { class: "row-meta" }, ...meta.flatMap((m, i) => (i ? [h("span", { class: "dot", "aria-hidden": "true" }, "·"), m] : [m]))) : null;
@@ -225,7 +225,6 @@ export class Transcript {
     // 时间
     const time = h("div", { class: "row-time mono" },
       h("time", {}, fmtTime(seg.start, { ms: hasText ? 0 : 1 })),
-      !hasText && h("small", {}, `→ ${fmtTime(seg.end, { ms: 1 })}`),
     );
 
     // 操作

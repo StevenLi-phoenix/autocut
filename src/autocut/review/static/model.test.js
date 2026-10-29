@@ -381,10 +381,13 @@ test("wordIndexAt / wordsText", () => {
   assert.equal(wordsText([{ text: "hello" }, { text: "world" }, { text: "," }]), "hello world,");
 });
 
-test("paceId 兼容几种叫法", () => {
-  assert.equal(paceId("tight"), "compact");
+test("paceId：认 cut 配方的取值，兼容别名，秒数不对应任何一档", () => {
+  assert.equal(paceId("tight"), "tight");
+  assert.equal(paceId("compact"), "tight");
   assert.equal(paceId("自然"), "natural");
   assert.equal(paceId("relaxed"), "relaxed");
+  assert.equal(paceId(0.3), null);
+  assert.equal(paceId(undefined), null);
 });
 
 test("bucketPeaks：每桶取最大值", () => {

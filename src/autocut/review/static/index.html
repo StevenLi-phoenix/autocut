@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>autocut 审阅</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='2' y='2' width='20' height='20' rx='5' fill='none' stroke='%232447c2' stroke-width='2.2'/%3E%3Cpath d='M4 5a3 3 0 0 1 3-3h5v20H7a3 3 0 0 1-3-3z' fill='%232447c2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#transcript">跳到文字稿</a>
+
+<div id="app" class="app" data-mode="timeline">
+  <header class="topbar">
+    <div class="tb-row">
+      <div class="brand" aria-label="autocut">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="2.5" y="2.5" width="19" height="19" rx="5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 6a3.5 3.5 0 0 1 3.5-3.5H12v19H7.5A3.5 3.5 0 0 1 4 18z" fill="currentColor"/></svg>
+        <span>autocut</span>
+      </div>
+      <div class="doc-id">
+        <h1 id="doc-title">…</h1>
+        <span id="doc-recipe" class="doc-recipe"></span>
+      </div>
+      <div class="tb-spacer"></div>
+      <div id="stats" class="stats" aria-label="时长概况"></div>
+      <button id="uncertain-btn" class="btn btn-warn" hidden></button>
+      <div id="save-state" class="save-state" role="status" aria-live="polite"></div>
+    </div>
+    <div class="tb-row toolbar" role="toolbar" aria-label="播放与操作">
+      <div class="btn-group" role="group" aria-label="播放方式">
+        <button id="mode-plan" class="btn" aria-pressed="true" title="按方案播放（P 切换）">▶︎ 按方案播放</button>
+        <button id="mode-orig" class="btn" aria-pressed="false" title="播放原片，不跳过（P 切换）">原片</button>
+      </div>
+      <span id="mode-note" class="muted small"></span>
+      <div id="pace" class="pace" role="radiogroup" aria-label="节奏档位" hidden>
+        <span class="pace-label">节奏</span>
+        <div class="seg">
+          <button role="radio" aria-checked="false" data-pace="tight">紧凑</button>
+          <button role="radio" aria-checked="false" data-pace="natural">自然</button>
+          <button role="radio" aria-checked="false" data-pace="relaxed">从容</button>
+        </div>
+        <span id="pace-custom" class="muted small" hidden></span>
+      </div>
+      <div class="tb-spacer"></div>
+      <span id="cand-auth" class="auth-note" hidden>ⓘ 发布前请确认已获得主播授权</span>
+      <button id="undo-btn" class="btn btn-quiet" aria-label="撤销（⌘Z）" title="撤销" disabled>↶ 撤销</button>
+      <button id="check-btn" class="btn">体检</button>
+      <div class="menu-host">
+        <button id="export-btn" class="btn" aria-label="导出工程">导出工程 ▾</button>
+      </div>
+      <button id="render-btn" class="btn btn-primary"><span id="render-label">出片</span> ▸</button>
+      <button id="size-btn" class="btn btn-quiet" aria-label="切换字号" title="字号：标准 / 大 / 特大（也可以用 ⌘+ 放大）">Aa</button>
+      <button id="help-btn" class="btn btn-quiet" aria-label="快捷键帮助（?）" title="快捷键（?）">?</button>
+    </div>
+  </header>
+
+  <div id="banners" class="banners"></div>
+
+  <div class="workspace">
+    <main id="main" class="main"></main>
+    <aside id="drawer" class="drawer" aria-label="发布前体检" hidden>
+      <div class="drawer-head">
+        <h2>发布前体检</h2>
+        <button id="drawer-rerun" class="btn btn-sm">重新体检</button>
+        <button id="drawer-close" class="icon-btn" aria-label="关闭体检面板（Esc）">×</button>
+      </div>
+      <div id="drawer-body" class="drawer-body"></div>
+    </aside>
+  </div>
+
+  <footer class="footer">
+    <div id="jobbar" class="jobbar" hidden aria-live="polite"></div>
+    <div class="hints">
+      <span><kbd>空格</kbd> 播放/暂停</span>
+      <span><kbd>J</kbd>/<kbd>K</kbd> 上/下一个决定</span>
+      <span><kbd>⇧J</kbd>/<kbd>⇧K</kbd> 只在拿不准之间跳</span>
+      <span><kbd>X</kbd> 剪/留切换</span>
+      <span><kbd>L</kbd> 锁定</span>
+      <span><kbd>[</kbd> <kbd>]</kbd> 微调边界 50ms</span>
+      <span><kbd><span data-mod>⌘</span>Z</kbd> 撤销</span>
+      <span><kbd>?</kbd> 全部快捷键</span>
+      <span class="tb-spacer"></span>
+      <span id="footer-save" class="muted"></span>
+    </div>
+  </footer>
+</div>
+
+<!-- ============ 模板 ============ -->
+
+<template id="tpl-transport">
+  <div class="transport">
+    <button id="play-btn" class="btn btn-icon" aria-label="播放（空格）" aria-pressed="false">▶︎</button>
+    <input id="scrub" class="scrub" type="range" min="0" max="1" step="0.01" value="0" aria-label="播放位置">
+    <div class="readout mono">
+      <span><span class="lbl">成片</span> <span id="t-out">—</span> / <span id="t-out-total">00:00</span></span>
+      <span><span class="lbl">原片</span> <span id="t-src">00:00.0</span> <span id="t-cutflag" class="cutflag" hidden>✂︎ 此处已剪</span></span>
+    </div>
+    <button id="rate-btn" class="btn btn-sm" aria-label="播放速度（点击切换）">1×</button>
+  </div>
+</template>
+
+<template id="tpl-timeline-block">
+  <div class="timeline-block">
+    <div class="tl-head">
+      <h2>时间线 <small>原片时间轴</small></h2>
+      <span id="wave-state" class="muted small" role="status"></span>
+      <div class="tb-spacer"></div>
+      <div class="btn-group" role="group" aria-label="时间线缩放">
+        <button id="zoom-out" class="btn btn-sm" aria-label="缩小时间线">−</button>
+        <button id="zoom-fit" class="btn btn-sm">适应</button>
+        <button id="zoom-in" class="btn btn-sm" aria-label="放大时间线">+</button>
+      </div>
+    </div>
+    <div class="tl-wrap">
+      <canvas id="overview" class="overview" aria-hidden="true"></canvas>
+      <canvas id="timeline" class="timeline-canvas" tabindex="0" role="img"
+        aria-label="时间线：波形和片段条。实心是保留，斜纹是剪掉，带点的黄色标签是拿不准。用 J、K 在决定之间移动，方括号微调边界，也可以用鼠标拖动片段边界。"></canvas>
+      <div id="tl-tip" class="tl-tip" hidden></div>
+    </div>
+    <ul class="legend" aria-label="图例">
+      <li><i class="sw sw-keep"></i> 保留</li>
+      <li><i class="sw sw-cut"></i> 剪掉（斜纹）</li>
+      <li><i class="sw sw-warn"></i> 拿不准（带点）</li>
+      <li class="muted">拖动片段边界可以改剪口；Ctrl/⌘ + 滚轮缩放</li>
+    </ul>
+  </div>
+</template>
+
+<template id="tpl-transcript-block">
+  <div class="doc-body">
+    <p id="no-text-note" class="note" hidden>没有文字稿，所以按片段列表和时间码显示。装好语音识别模型（models/ggml-large-v3-turbo.bin）后重新运行 autocut cut，就会有文字。</p>
+    <div class="doc-scroll" id="doc-scroll">
+      <ol id="rows" class="rows" aria-label="片段列表"></ol>
+    </div>
+    <button id="follow-btn" class="btn btn-primary follow" hidden>回到播放位置 ↓</button>
+  </div>
+</template>
+
+<template id="tpl-timeline">
+  <section class="pane stage" aria-label="预览与时间线">
+    <div class="player">
+      <video id="video" playsinline></video>
+      <div id="skip-chip" class="skip-chip" hidden aria-hidden="true"></div>
+      <div id="player-msg" class="player-msg" role="status" hidden></div>
+    </div>
+    <div data-slot="transport"></div>
+    <div data-slot="timeline"></div>
+  </section>
+  <section class="pane doc" id="transcript" aria-label="文字稿" tabindex="-1">
+    <div class="doc-head">
+      <h2>文字稿</h2>
+      <div id="filter-bar" class="seg" role="radiogroup" aria-label="筛选">
+        <button role="radio" aria-checked="true" data-filter="all">全部 <span class="count mono"></span></button>
+        <button role="radio" aria-checked="false" data-filter="uncertain">拿不准 <span class="count mono"></span></button>
+        <button role="radio" aria-checked="false" data-filter="cut">剪掉 <span class="count mono"></span></button>
+        <button role="radio" aria-checked="false" data-filter="keep">保留 <span class="count mono"></span></button>
+      </div>
+    </div>
+    <div id="reason-chips" class="chips" role="group" aria-label="按剪掉的理由筛选"></div>
+    <div data-slot="transcript" class="slot-fill"></div>
+  </section>
+</template>
+
+<template id="tpl-candidates">
+  <section class="pane cand-col" aria-label="候选列表">
+    <div class="doc-head">
+      <h2>候选 <small>按分数</small></h2>
+      <div class="tb-spacer"></div>
+      <button id="preview-all" class="btn btn-sm">▶︎ 预览所选</button>
+    </div>
+    <ol id="cand-list" class="cand-list" aria-label="候选清单"></ol>
+  </section>
+  <section class="pane cand-mid" id="cand-preview" aria-label="竖屏预览">
+    <div class="frame-wrap">
+      <div id="frame" class="frame">
+        <video id="video" playsinline></video>
+        <div id="skip-chip" class="skip-chip" hidden aria-hidden="true"></div>
+        <div id="player-msg" class="player-msg" role="status" hidden></div>
+      </div>
+    </div>
+    <div id="crop-tools" class="crop-tools" hidden>
+      <span class="muted small">裁切框</span>
+      <button class="btn btn-sm" data-crop="left" aria-label="裁切框向左 5%">◂</button>
+      <button class="btn btn-sm" data-crop="center">居中</button>
+      <button class="btn btn-sm" data-crop="right" aria-label="裁切框向右 5%">▸</button>
+      <span class="muted small">也可以直接在画面上拖动</span>
+    </div>
+    <div data-slot="transport"></div>
+    <div data-slot="timeline"></div>
+  </section>
+  <section class="pane cand-why" id="cand-why" aria-label="为什么入选">
+    <div id="why-body" class="why-body"></div>
+    <div class="why-tools">
+      <label class="check"><input type="checkbox" id="cand-select"> <span id="cand-select-label"></span> <kbd>S</kbd></label>
+      <div class="trim" role="group" aria-label="微调开头和结尾">
+        <span class="trim-label">开头</span>
+        <button class="btn btn-sm" data-trim="start:-1" aria-label="开头提前 1 秒（多留 1 秒）">−1s</button>
+        <button class="btn btn-sm" data-trim="start:1" aria-label="开头推后 1 秒（少留 1 秒）">+1s</button>
+        <span class="trim-label">结尾</span>
+        <button class="btn btn-sm" data-trim="end:-1" aria-label="结尾提前 1 秒（少留 1 秒）">−1s</button>
+        <button class="btn btn-sm" data-trim="end:1" aria-label="结尾推后 1 秒（多留 1 秒）">+1s</button>
+      </div>
+      <p class="muted small">开头 −1s 是往前多留 1 秒，+1s 是往后少留 1 秒。</p>
+    </div>
+    <div data-slot="transcript" class="slot-fill"></div>
+  </section>
+</template>
+
+<!-- ============ 对话框 ============ -->
+
+<dialog id="help" aria-labelledby="help-title">
+  <form method="dialog" class="dlg">
+    <div class="dlg-head"><h2 id="help-title">快捷键</h2><button id="help-close" class="icon-btn" aria-label="关闭" type="button">×</button></div>
+    <table class="keys">
+      <tbody>
+        <tr><td><kbd>空格</kbd></td><td>播放 / 暂停</td></tr>
+        <tr><td><kbd>P</kbd></td><td>在“按方案播放”和“原片”之间切换</td></tr>
+        <tr><td><kbd>J</kbd> <kbd>K</kbd></td><td>下一个 / 上一个决定（剪掉的、拿不准的、有说明的）</td></tr>
+        <tr><td><kbd>⇧J</kbd> <kbd>⇧K</kbd></td><td>只在“拿不准”之间跳</td></tr>
+        <tr><td><kbd>X</kbd></td><td>切换当前决定：剪掉 ⇄ 保留（改完不再算“拿不准”）</td></tr>
+        <tr><td><kbd>L</kbd></td><td>锁定 / 解锁：重新生成方案时保持不变</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>试听当前片段（前后各多放 1 秒，不跳过）</td></tr>
+        <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>当前边界 提前 / 推后 50ms（加 <kbd>⇧</kbd> 为 500ms）</td></tr>
+        <tr><td><kbd>E</kbd></td><td>切换微调的是起点还是终点</td></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>后退 / 前进 1 秒（加 <kbd>⇧</kbd> 为 5 秒）</td></tr>
+        <tr><td><kbd><span data-mod>⌘</span>Z</kbd></td><td>撤销（<kbd>⇧</kbd><kbd><span data-mod>⌘</span>Z</kbd> 重做）</td></tr>
+        <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>候选清单里切换候选</td></tr>
+        <tr><td><kbd>S</kbd></td><td>候选清单里勾选 / 取消当前候选</td></tr>
+        <tr><td><kbd>?</kbd></td><td>打开这个窗口</td></tr>
+      </tbody>
+    </table>
+    <label class="check"><input type="checkbox" id="opt-audition"> 微调边界时自动试听剪口附近（约 1 秒）</label>
+    <p class="muted small">字号：点工具栏的 <strong>Aa</strong> 切换，或者用 <kbd><span data-mod>⌘</span>+</kbd> 放大整个页面。所有改动自动保存，也可以随时在终端里让 agent 接着改同一份方案文件。</p>
+  </form>
+</dialog>
+
+<dialog id="confirm" aria-labelledby="confirm-title">
+  <form method="dialog" class="dlg">
+    <div class="dlg-head"><h2 id="confirm-title">还有拿不准的地方</h2></div>
+    <div id="confirm-body"></div>
+    <div class="dlg-actions">
+      <button id="confirm-review" class="btn" type="button">先去看看</button>
+      <button id="confirm-go" class="btn btn-primary" type="button">就这样出片</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<div id="sr-live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

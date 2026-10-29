@@ -10,7 +10,7 @@ import {
 import { PlanPlayer } from "./player.js";
 import { Timeline } from "./timeline.js";
 import { Transcript } from "./transcript.js";
-import { $, $$, GLYPH, announce, basename, copyText, debounce, h, menu, reducedMotion, safeStorage, toast } from "./ui.js";
+import { $, $$, GLYPH, announce, basename, copyText, debounce, fill, h, menu, safeStorage, toast } from "./ui.js";
 
 const store = safeStorage();
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -52,7 +52,7 @@ async function boot() {
   try {
     data = await api.plan();
   } catch (e) {
-    $("#main").replaceChildren(errorPanel("打不开方案", e.message, e.code === "offline" ? null : "检查方案文件是否存在、是否是合法的 autocut 方案（autocut plan summary 可以验证）。"));
+    fill($("#main"), errorPanel("打不开方案", e.message, e.code === "offline" ? null : "检查方案文件是否存在、是否是合法的 autocut 方案（autocut plan summary 可以验证）。"));
     return;
   }
   adoptServerPlan(data);
@@ -60,7 +60,7 @@ async function boot() {
   state.outputId = state.mode === "candidates"
     ? (rankedOutputs().find((o) => o.selected) ?? rankedOutputs()[0]).id
     : state.plan.outputs[0].id;
-  document.title = `${state.meta.name} · autocut 审阅`;
+  document.title = `${basename(state.plan.sources[mainSource()]?.path) || state.meta.name} · autocut 审阅`;
   $app.dataset.mode = state.mode;
   mountMain();
   bindChrome();
@@ -85,7 +85,10 @@ function errorPanel(title, message, hint) {
 // ---------------------------------------------------------------- 主区域
 function mountMain() {
   const main = $("#main");
-  main.replaceChildren($(`#tpl-${state.mode}`).content.cloneNode(true));
+  fill(main, $(`#tpl-${state.mode}`).content.cloneNode(true));
+  for (const [slot, tpl] of [["transport", "tpl-transport"], ["timeline", "tpl-timeline-block"], ["transcript", "tpl-transcript-block"]]) {
+    for (const el of $$(`[data-slot="${slot}"]`, main)) el.replaceWith($(`#${tpl}`).content.cloneNode(true));
+  }
   videoEl = $("#video");
   player = new PlanPlayer(videoEl);
   timeline = new Timeline({
@@ -117,6 +120,7 @@ function stopFollow() {
 }
 
 async function loadOutput({ first = false } = {}) {
+  lastSegNow = null;
   const o = out();
   const src = mainSource(o);
   const hasText = o.segments.some((s) => s.text);
@@ -131,9 +135,14 @@ async function loadOutput({ first = false } = {}) {
   refreshHeader();
 
   const info = sources()[src];
+  const msg = $("#player-msg");
   if (info && info.exists) {
+    msg.hidden = true;
     await player.load(src);
     ensureFrameLayout();
+  } else if (info && info.kind !== "image") {
+    fill(msg, h("strong", {}, "找不到素材文件，没法预览"), h("span", {}, info.abs_path), h("span", {}, "方案和文字稿仍然可以审阅和修改；在页面上方“重新定位”之后就能播放。"));
+    msg.hidden = false;
   }
   if (first) {
     const firstDecision = o.segments.find((s) => isUncertain(s)) ?? o.segments.find(isDecision) ?? o.segments[0];
@@ -181,7 +190,7 @@ function refreshHeader() {
   const o = out();
   const plan = state.plan;
   const src = plan.sources[mainSource(o)];
-  $("#doc-title").textContent = candidateMode() ? basename(src?.path) : basename(src?.path);
+  $("#doc-title").textContent = basename(src?.path);
   $("#doc-title").title = state.meta.path;
   $("#doc-recipe").textContent = RECIPE_LABEL[plan.recipe] ?? plan.recipe;
   const stats = $("#stats");
@@ -190,7 +199,7 @@ function refreshHeader() {
     const opt = plan.options ?? {};
     const len = Array.isArray(opt.length) ? ` · 每条 ${opt.length[0]}–${opt.length[1]}s` : "";
     const aspect = opt.aspect ? ` · ${opt.aspect}` : "";
-    stats.replaceChildren(h("span", { class: "mono" }, `${plan.outputs.length} 个候选 · 已选 ${sel.length}${len}${aspect}`));
+    fill(stats, h("span", { class: "mono" }, `${plan.outputs.length} 个候选 · 已选 ${sel.length}${len}${aspect}`));
     $("#render-label").textContent = `出片：${sel.length} 条`;
     $("#render-btn").disabled = sel.length === 0 || !state.meta.capabilities.render;
   } else {
@@ -198,7 +207,7 @@ function refreshHeader() {
     const parts = [h("span", { class: "mono" }, o.segments.some((x) => x.action === "cut")
       ? `${fmtTime(s.span)} → ${fmtTime(s.duration)}` : `成片 ${fmtTime(s.duration)}`)];
     if (s.cutCount) parts.push(h("span", { class: "mono" }, ` · 剪掉 ${fmtTime(s.removed)} (${Math.round(s.removedPct * 100)}%)`));
-    stats.replaceChildren(...parts);
+    fill(stats, ...parts);
     $("#render-label").textContent = "出片";
     $("#render-btn").disabled = !state.meta.capabilities.render;
   }
@@ -206,7 +215,7 @@ function refreshHeader() {
   const unc = uncertainCount();
   const ub = $("#uncertain-btn");
   ub.hidden = unc === 0;
-  ub.replaceChildren(GLYPH.warn, ` ${unc} 处拿不准`);
+  fill(ub, GLYPH.warn, ` ${unc} 处拿不准`);
   ub.setAttribute("aria-label", `${unc} 处拿不准，点击跳到第一处`);
   $("#cand-auth").hidden = !candidateMode();
   $("#check-btn").disabled = !state.meta.capabilities.check;
@@ -246,11 +255,15 @@ function refreshPace() {
   wrap.hidden = pace == null;
   if (pace == null) return;
   const cur = paceId(pace);
+  const keep = state.plan.options?.keep_pause;
+  wrap.title = keep != null ? `每个停顿保留 ${keep}s。改节奏要重新生成方案。` : "改节奏要重新生成方案";
   for (const b of $$("[data-pace]", wrap)) {
     const on = b.dataset.pace === cur;
     b.setAttribute("aria-checked", String(on));
-    b.tabIndex = on || !PACE_LEVELS.some((l) => l.id === cur) ? 0 : -1;
+    b.tabIndex = on || cur === null ? 0 : -1;
   }
+  $("#pace-custom").hidden = cur !== null;
+  $("#pace-custom").textContent = typeof pace === "number" ? `自定义 ${pace}s` : String(pace);
 }
 
 // ---------------------------------------------------------------- 横幅
@@ -262,7 +275,7 @@ function setBanner(key, { kind = "info", title, body, actions = [], dismiss = nu
 function clearBanner(key) { if (banners.delete(key)) renderBanners(); }
 function renderBanners() {
   const host = $("#banners");
-  host.replaceChildren(...[...banners.entries()].map(([key, b]) => h("div", { class: `banner banner-${b.kind}`, role: b.kind === "error" ? "alert" : "region", "aria-label": b.title },
+  fill(host, ...[...banners.entries()].map(([key, b]) => h("div", { class: `banner banner-${b.kind}`, role: b.kind === "error" ? "alert" : "region", "aria-label": b.title },
     h("div", { class: "banner-text" }, b.title && h("strong", {}, b.title, " "), b.body),
     h("div", { class: "banner-actions" }, ...b.actions.map((a) => h("button", { class: "btn btn-sm", onclick: a.onclick }, a.label)),
       b.dismiss !== false && h("button", { class: "icon-btn", "aria-label": "关闭这条提示", onclick: () => { b.dismiss?.(); clearBanner(key); } }, "×")),
@@ -277,7 +290,7 @@ function setupBanners() {
       kind: "tip",
       body: candidateMode()
         ? "候选按分数从高到低排好了；勾选要出片的，右边写着为什么入选。满意就点“出片”。"
-        : `${GLYPH.cut} 是建议剪掉的地方。${nU ? `按 ⇧K 只看拿不准的 ${nU} 处；` : ""}满意就点“出片”。`,
+        : `${GLYPH.cut} 是建议剪掉的地方。${nU ? `按 ⇧J 逐个看拿不准的 ${nU} 处；` : ""}满意就点“出片”。`,
       actions: [{ label: "知道了", onclick: () => { store.setItem(introKey, "1"); clearBanner("intro"); } }],
       dismiss: () => store.setItem(introKey, "1"),
     });
@@ -311,10 +324,12 @@ function showMissing(sid, info) {
       state.base.sources[sid].path = d.plan.sources[sid].path;
       state.revision = d.revision; state.etag = d.etag;
       clearBanner(`missing:${sid}`);
+      $("#player-msg").hidden = true;
       toast("素材已重新定位", { kind: "ok" });
-      await player.load(sid); // 之前没加载成功
-      player.sourceId = null;
+      player.sourceId = null; // 之前没加载成功，强制重新加载
+      player.setOutput(out(), sources());
       await player.load(sid);
+      ensureFrameLayout();
       ensurePeaks(sid);
       ensureWords(sid);
       refreshHeader();
@@ -669,7 +684,7 @@ function bindTransport() {
 function syncTransport() {
   const playing = !videoEl.paused;
   const b = $("#play-btn");
-  b.replaceChildren(playing ? GLYPH.pause : GLYPH.play);
+  fill(b, playing ? GLYPH.pause : GLYPH.play);
   b.setAttribute("aria-label", playing ? "暂停（空格）" : "播放（空格）");
   b.setAttribute("aria-pressed", String(playing));
 }
@@ -695,6 +710,8 @@ function mountFilters() {
   bar.addEventListener("click", (e) => {
     const b = e.target.closest("[data-filter]");
     if (b) setFilter({ kind: b.dataset.filter, reason: null });
+  });
+  $("#reason-chips").addEventListener("click", (e) => {
     const r = e.target.closest("[data-reason]");
     if (r) setFilter({ kind: "all", reason: state.filter.reason === r.dataset.reason ? null : r.dataset.reason });
   });
@@ -735,7 +752,7 @@ function updateFilterCounts() {
   const byReason = {};
   for (const s of segs) if (s.action === "cut") byReason[s.reason] = (byReason[s.reason] ?? 0) + 1;
   const chips = $("#reason-chips");
-  chips.replaceChildren(...Object.entries(byReason).sort((a, b) => b[1] - a[1]).map(([r, n]) =>
+  fill(chips, ...Object.entries(byReason).sort((a, b) => b[1] - a[1]).map(([r, n]) =>
     h("button", { class: "chip", dataset: { reason: r }, "aria-pressed": String(state.filter.reason === r), title: `只看被剪掉的“${REASONS[r] ?? r}”` },
       GLYPH.cut, ` ${REASONS[r] ?? r} `, h("span", { class: "mono" }, String(n)))));
 }
@@ -775,7 +792,7 @@ function renderCandidateList() {
   const list = $("#cand-list");
   const focusId = document.activeElement?.closest?.(".cand")?.dataset.out;
   const ranked = rankedOutputs();
-  list.replaceChildren(...ranked.map((o, i) => {
+  fill(list, ...ranked.map((o, i) => {
     const [a, b] = candRange(o);
     const reason = o.reasons[0] ?? "";
     const unc = o.segments.filter(isUncertain).length;
@@ -804,12 +821,12 @@ function renderWhy() {
   const k = keptSegments(o);
   const box = $("#why-body");
   const first = k[0], last = k[k.length - 1];
-  box.replaceChildren(
+  fill(box, 
     h("h2", { class: "why-title" }, o.title || o.id),
     h("p", { class: "why-meta mono" }, o.score != null ? `${o.score} 分 · ` : "", `${fmtTime(outputDuration(o))} 长`, !o.selected ? " · 没选" : ""),
     h("h3", {}, "为什么入选"),
     o.reasons.length ? h("ul", { class: "why-list" }, ...o.reasons.map((r) => h("li", {}, r))) : h("p", { class: "muted" }, "方案没有给出理由。"),
-    first && h("p", { class: "why-edge" }, h("strong", {}, "开头："), first.reason === "lead_in" ? `铺垫 ${(first.end - first.start).toFixed(1)}s 后进入。` : "", first.detail ? ` ${first.detail}` : ` 从 ${fmtTime(first.start, { ms: 1 })} 开始。`),
+    first && h("p", { class: "why-edge" }, h("strong", {}, "开头："), first.detail ? ` ${first.detail}` : first.reason === "lead_in" ? ` 铺垫 ${(first.end - first.start).toFixed(1)}s 后进入。` : ` 从 ${fmtTime(first.start, { ms: 1 })} 开始。`),
     last && h("p", { class: "why-edge" }, h("strong", {}, "结尾："), last.detail ? ` ${last.detail}` : ` 在 ${fmtTime(last.end, { ms: 1 })}。`),
   );
   $("#cand-select-label").textContent = o.selected ? "已选中，会出片" : "没选，不会出片";
@@ -973,7 +990,7 @@ async function requestRender() {
   const unc = ids.reduce((a, id) => a + state.plan.outputs.find((o) => o.id === id).segments.filter(isUncertain).length, 0);
   if (unc === 0) return startRender(ids);
   const dlg = $("#confirm");
-  $("#confirm-body").replaceChildren(
+  fill($("#confirm-body"), 
     h("p", {}, `还有 ${unc} 处“拿不准”没有确认。直接出片的话，它们按机器当时的判断处理（${GLYPH.cut} 的剪掉，其余保留）。`),
     candidateMode() && h("p", { class: "muted" }, "发布前请确认已获得主播授权。"));
   $("#confirm-go").onclick = () => { dlg.close(); startRender(ids); };
@@ -1007,7 +1024,7 @@ async function pollJob(id, ids) {
     state.job = { ...state.job, ...j, ids };
     renderJobBar();
     if (j.status !== "running") {
-      if (j.status === "error") setBanner("render-error", { kind: "error", title: "出片失败：", body: h("span", { class: "pre" }, j.error), actions: [{ label: "重试", onclick: () => startRender(ids) }, { label: "复制错误", onclick: () => copyText(j.error).then(() => toast("已复制")) }] });
+      if (j.status === "error") setBanner("render-error", { kind: "error", title: "出片失败：", body: h("span", {}, h("span", { class: "pre" }, j.error), h("br"), h("span", { class: "muted" }, "方案已经保存，没有丢。按上面的说明处理后点“重试”；需要帮助时点“复制错误”发给 agent。")), actions: [{ label: "重试", onclick: () => startRender(ids) }, { label: "复制错误", onclick: () => copyText(j.error).then(() => toast("已复制")) }] });
       announce(j.status === "done" ? "出片完成" : j.status === "cancelled" ? "已取消出片" : "出片失败");
       return;
     }
@@ -1035,7 +1052,7 @@ function renderJobBar() {
     const pct = Math.round((j.fraction ?? 0) * 100);
     const eta = j.eta != null ? ` · 约剩 ${fmtTime(j.eta)}` : "";
     bar.className = "jobbar is-running";
-    bar.replaceChildren(
+    fill(bar, 
       h("progress", { max: 100, value: pct, "aria-label": "出片进度" }),
       h("span", { class: "job-text" }, `出片中 · ${j.stage} `, h("span", { class: "mono" }, `${pct}%${eta}`)),
       h("button", { class: "btn btn-sm", onclick: () => api.cancelJob(j.id).catch(() => {}) }, "取消"));
@@ -1044,18 +1061,20 @@ function renderJobBar() {
     bar.className = "jobbar is-done";
     const line = (r) => {
       const sync = r.drift == null ? null : r.drift <= 0.05 ? `音画同步 ✓` : `${GLYPH.warn} 音画相差 ${(r.drift * 1000).toFixed(0)}ms`;
-      return [r.name, r.dur != null && fmtTime(r.dur), sync, r.lufs != null && `响度 ${Number(r.lufs).toFixed(1)} LUFS`].filter(Boolean).join(" · ");
+      const text = [r.name, r.dur != null && fmtTime(r.dur), sync, r.lufs != null && `响度 ${Number(r.lufs).toFixed(1)} LUFS`].filter(Boolean).join(" · ");
+      return h("span", { title: r.path }, text); // 完整路径放在悬停提示里
     };
     const warns = rs.flatMap((r) => r.warnings.map((w) => `${r.id ? r.id + "：" : ""}${w}`));
-    bar.replaceChildren(
-      h("span", { class: "job-text" }, h("strong", {}, rs.length === 1 ? "成片：" : `已出片 ${rs.length} 条：`),
-        rs.length === 1 ? line(rs[0]) : rs.map((r) => h("div", { class: "job-line" }, line(r))),
+    fill(bar, 
+      h("span", { class: "job-text" }, h("strong", {}, rs.length === 1 ? "成片：" : `已出片 ${rs.length} 条`),
+        rs.length === 1 ? line(rs[0]) : h("span", {}, ` · 共 ${fmtTime(rs.reduce((a, r) => a + (r.dur ?? 0), 0))}${rs.every((r) => r.drift != null && r.drift <= 0.05) ? " · 音画同步 ✓" : ""}`),
+        rs.length > 1 && h("details", {}, h("summary", {}, "每个文件"), rs.map((r) => h("div", { class: "job-line" }, line(r)))),
         warns.length ? h("div", { class: "job-warn" }, GLYPH.warn, " ", warns.join("；")) : null),
       rs[0]?.path && h("button", { class: "btn btn-sm", onclick: () => api.reveal(rs[0].path).catch((e) => toast(e.message, { kind: "error" })) }, "在 Finder 中显示"),
       h("button", { class: "icon-btn", "aria-label": "收起这条结果", onclick: () => { state.job = null; renderJobBar(); } }, "×"));
   } else {
     bar.className = "jobbar is-failed";
-    bar.replaceChildren(h("span", { class: "job-text" }, j.status === "cancelled" ? "已取消出片。" : `${GLYPH.warn} 出片没有完成，原因见页面上方。`),
+    fill(bar, h("span", { class: "job-text" }, j.status === "cancelled" ? "已取消出片。" : `${GLYPH.warn} 出片没有完成，原因见页面上方。`),
       h("button", { class: "icon-btn", "aria-label": "收起", onclick: () => { state.job = null; renderJobBar(); } }, "×"));
   }
 }
@@ -1064,38 +1083,44 @@ function renderJobBar() {
 const DISCLAIMER = "这些是留存风险信号，不是爆款保证。";
 
 function normalizeReport(rep) {
+  // check.py 的 CheckReport.to_dict()：items[{id, severity: risk|warn|info, at, end, message, fix}]（时间是成片时间轴上的秒）
   const arr = ["items", "findings", "risks", "issues", "signals", "checks"].map((k) => rep?.[k]).find(Array.isArray) ?? [];
+  const order = { risk: 0, high: 0, critical: 0, error: 0, warn: 1, warning: 1, medium: 1, info: 2, low: 2 };
   const items = arr.map((x, i) => {
     const t = [x.at, x.time, x.t, x.start, x.position, x.out_start].find((v) => typeof v === "number");
     const space = x.source_time != null || x.src_start != null ? "source" : "output";
     const tt = x.source_time ?? x.src_start ?? t;
+    const message = x.message ?? x.detail ?? x.text ?? x.why ?? "";
     return {
       i, t: typeof tt === "number" ? tt : null, end: [x.end, x.out_end, x.src_end].find((v) => typeof v === "number") ?? null, space,
       severity: String(x.severity ?? x.level ?? "info").toLowerCase(),
-      title: x.title ?? x.kind ?? x.rule ?? x.name ?? "提示",
-      message: x.message ?? x.detail ?? x.text ?? x.why ?? "",
-      advice: x.suggestion ?? x.fix ?? x.advice ?? x.action ?? "",
+      code: x.id ?? x.kind ?? x.rule ?? null,
+      title: x.title ?? message ?? "提示",
+      message: x.title ? message : "",
+      advice: x.fix ?? x.suggestion ?? x.advice ?? x.action ?? "",
     };
-  });
-  return { items, summary: rep?.summary ?? rep?.headline ?? "", disclaimer: rep?.disclaimer ?? rep?.note ?? DISCLAIMER, raw: rep };
+  }).sort((a, b) => (order[a.severity] ?? 3) - (order[b.severity] ?? 3) || (a.t ?? 1e9) - (b.t ?? 1e9));
+  const disclaimer = rep?.disclaimer ?? rep?.note ?? DISCLAIMER;
+  const summary = String(rep?.summary ?? rep?.headline ?? "").replace(disclaimer, "").trim();
+  return { items, summary, disclaimer, raw: rep };
 }
 
 const SEV = {
-  high: ["▲", "高风险"], critical: ["▲", "高风险"], error: ["▲", "高风险"],
-  medium: ["◆", "中风险"], warn: ["◆", "中风险"], warning: ["◆", "中风险"],
-  low: ["●", "低风险"], info: ["●", "提示"],
+  risk: ["▲", "风险"], high: ["▲", "风险"], critical: ["▲", "风险"], error: ["▲", "风险"],
+  warn: ["◆", "提醒"], warning: ["◆", "提醒"], medium: ["◆", "提醒"],
+  info: ["●", "说明"], low: ["●", "说明"],
 };
 
 async function runCheck() {
   openDrawer();
   const body = $("#drawer-body");
-  body.replaceChildren(h("p", { class: "muted", role: "status" }, "正在体检…"));
-  try { await flushSave(); } catch (e) { body.replaceChildren(errorPanel("体检前需要先保存", e.message)); return; }
+  fill(body, h("p", { class: "muted", role: "status" }, `正在体检${candidateMode() ? "「" + (out().title || out().id) + "」" : ""}…按方案估算，不渲染；没有文字稿时会先识别语音，第一次可能要几分钟。`));
+  try { await flushSave(); } catch (e) { fill(body, errorPanel("体检前需要先保存", e.message)); return; }
   try {
-    state.check = normalizeReport(await api.check(candidateMode() ? null : out().id));
+    state.check = normalizeReport(await api.check(out().id));
     renderCheck();
   } catch (e) {
-    body.replaceChildren(errorPanel(e.status === 503 ? "体检模块不可用" : "体检没有完成", e.message, "方案和审阅不受影响。"));
+    fill(body, errorPanel(e.status === 503 ? "体检模块不可用" : "体检没有完成", e.message, "方案和审阅不受影响。"));
   }
 }
 
@@ -1108,7 +1133,7 @@ function renderCheck() {
       const [glyph, label] = SEV[x.severity] ?? SEV.info;
       return h("button", { class: `risk-pin sev-${x.severity}`, style: { left: `${Math.min(100, (x.t / dur) * 100)}%` }, "aria-label": `${label} ${fmtTime(x.t)} ${x.title}`, title: `${fmtTime(x.t)} ${x.title}`, onclick: () => jumpToCheck(x) }, glyph);
     }));
-  body.replaceChildren(
+  fill(body, 
     rep.summary && h("p", { class: "check-summary" }, String(rep.summary)),
     rep.items.length ? h("div", { class: "risk-wrap" }, track, h("div", { class: "risk-axis mono" }, h("span", {}, "00:00"), h("span", {}, fmtTime(dur)))) : h("p", {}, "没有发现需要注意的信号。"),
     h("ol", { class: "risk-list" }, ...rep.items.map((x) => {
@@ -1140,9 +1165,9 @@ function closeDrawer() { $("#drawer").hidden = true; $app.classList.remove("with
 // 导出 ---------------------------------------------------------------
 async function doExport(fmt) {
   try { await flushSave(); } catch (e) { toast(e.message, { kind: "error" }); return; }
-  const t = toast(`正在导出 ${fmt}…`, { timeout: 0 });
+  const t = toast(`正在导出 ${fmt}${candidateMode() ? "（当前候选）" : ""}…`, { timeout: 0 });
   try {
-    const r = await api.exportPlan(fmt, candidateMode() ? null : out().id);
+    const r = await api.exportPlan(fmt, out().id);
     t.remove();
     const p = r.paths?.[0];
     toast(p ? `已导出 ${fmt}：${basename(p)}` : `已导出 ${fmt}`, { kind: "ok", timeout: 9000, action: p ? { label: "在 Finder 中显示", onclick: () => api.reveal(p).catch((e) => toast(e.message, { kind: "error" })) } : null });
@@ -1258,4 +1283,5 @@ function onKey(e) {
   if (e.key === "?") { e.preventDefault(); $("#help").showModal(); }
 }
 
+window.__autocut = { state, get player() { return player; }, get timeline() { return timeline; }, get transcript() { return transcript; } }; // 便于在控制台和自动化里检查
 boot();

@@ -757,7 +757,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         t0 = time.perf_counter()
         try:
             report = _call_flex(check, plan, output_id=body.get("output_id"))
-        except PlanError as e:
+        except (PlanError, ValueError, FileNotFoundError) as e:
             raise ApiError(HTTPStatus.BAD_REQUEST, str(e)) from None
         except Exception as e:
             log.warning("体检失败", exc_info=True)
@@ -774,7 +774,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         plan = self._fresh_plan()
         try:
             result = _jsonify(_call_flex(export, plan, fmt, output_id=body.get("output_id")))
-        except PlanError as e:
+        except (PlanError, ValueError, FileNotFoundError) as e:  # 比如"没有文字稿，导出不了字幕"：说明已经够具体，原样给用户
             raise ApiError(HTTPStatus.BAD_REQUEST, str(e)) from None
         except Exception as e:
             log.warning("导出 %s 失败", fmt, exc_info=True)

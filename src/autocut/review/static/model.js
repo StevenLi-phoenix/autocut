@@ -501,17 +501,19 @@ export function wordsText(words) {
   return out;
 }
 
-/** 节奏档位：recipe-cut 的取值表。第一项是显示名，第二项是命令行取值。 */
+/** 节奏档位：和 recipes/cut.py 的 PACES 一致（每个停顿保留 0.15 / 0.4 / 0.8 秒）。pace 也可能是一个秒数。 */
 export const PACE_LEVELS = [
-  { id: "compact", label: "紧凑" },
-  { id: "natural", label: "自然" },
-  { id: "relaxed", label: "从容" },
+  { id: "tight", label: "紧凑", seconds: 0.15 },
+  { id: "natural", label: "自然", seconds: 0.4 },
+  { id: "relaxed", label: "从容", seconds: 0.8 },
 ];
-const PACE_ALIASES = { tight: "compact", fast: "compact", 紧凑: "compact", 自然: "natural", normal: "natural", loose: "relaxed", slow: "relaxed", 从容: "relaxed" };
+const PACE_ALIASES = { compact: "tight", fast: "tight", 紧凑: "tight", 自然: "natural", normal: "natural", loose: "relaxed", slow: "relaxed", 从容: "relaxed" };
 
+/** options.pace → 档位 id；给的是秒数或者不认识的值时返回 null（界面不选中任何一档）。 */
 export function paceId(value) {
-  const v = String(value ?? "").toLowerCase();
-  return PACE_ALIASES[v] ?? v;
+  const v = String(value ?? "").trim().toLowerCase();
+  const id = PACE_ALIASES[v] ?? v;
+  return PACE_LEVELS.some((l) => l.id === id) ? id : null;
 }
 
 /** 点击波形/峰值数据的降采样：把 peaks（每秒 per_sec 个）压到 width 个桶，每桶取最大值。 */
