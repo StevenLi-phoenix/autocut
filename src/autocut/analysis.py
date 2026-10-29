@@ -118,16 +118,15 @@ class Media:
         if not transcribe.available():
             return None
         return self._cached(
-            f"words-{language or 'auto'}-t{track}-{transcribe.model_tag()}",
+            words_cache_name(language, track),
             lambda: transcribe.transcribe(self, language=language, track=track),
         )
 
     def words_cache_path(self, language: str | None = None, track: int | None = None) -> Path | None:
         try:
-            from autocut import transcribe
+            p = self.cache_dir / f"{words_cache_name(language, track)}.json"
         except ImportError:
             return None
-        p = self.cache_dir / f"words-{language or 'auto'}-t{track}-{transcribe.model_tag()}.json"
         return p if p.exists() else None
 
     # ---- 缓存 ----
@@ -146,6 +145,13 @@ class Media:
         tmp.replace(p)
         log.info("分析 %s · %s：%.2fs（已缓存）", self.path.name, name, time.perf_counter() - t0)
         return json.loads(p.read_text())
+
+
+def words_cache_name(language: str | None, track: int | None) -> str:
+    """文字稿缓存名：语言 + 音轨 + 模型 + 解析版本。换模型或改了解析逻辑，旧缓存自动不再命中。"""
+    from autocut import transcribe
+
+    return f"words-{language or 'auto'}-t{track}-{transcribe.model_tag()}-p{transcribe.PARSE_VERSION}"
 
 
 def _kw(kw: dict[str, Any]) -> str:

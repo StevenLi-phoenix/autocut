@@ -516,6 +516,10 @@ class _SourceCut:
         if n_tracks == 0:
             raise RecipeError(f"{media.path} 没有音轨：cut 配方靠人声判断，请换一个带声音的素材")
         self.atrack = resolve_track(media.path, track) if track is not None else media.voice_track()
+        if track is None and self.atrack is None and n_tracks >= 2:
+            titles = [t.title for t in media.info.audio]
+            self.warnings.append(f"有 {n_tracks} 条音轨（标题 {titles}），但没有标题像人声的音轨，判断用的是默认音轨；"
+                                 "如果人声在别的轨上，用 track 指定")
         self.out_track = media.mix_track()  # 输出用混音轨；没有就用默认轨（None）
         self.game = n_tracks >= 2 if keep_action == "auto" else bool(keep_action)
         self.duration = media.duration
@@ -630,10 +634,13 @@ class _SourceCut:
             t = b
         if t < p.end:
             spans.append((t, p.end, False))
+        r = self._overlaps_protect(p.start, p.end)
+        assert r is not None
         out = []
         for a, b, prot in spans:
             if prot or b - a <= SLACK:  # 剩下的零头太短，不值得一刀
-                out.append(_Piece(a, b, "keep", "manual", 1.0, f"受保护区间：保留（原判断：{p.detail}）",
+                out.append(_Piece(a, b, "keep", "manual", 1.0,
+                                  f"受保护区间 {_ts(r[0])}–{_ts(r[1])}：保留（原判断：{p.detail}）",
                                   ("prot", id(p)), {"original": {"action": p.action, "reason": p.reason}},
                                   locked=True))
             else:

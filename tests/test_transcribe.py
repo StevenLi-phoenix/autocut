@@ -168,6 +168,34 @@ def test_reuses_cached_raw_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert words == [{"text": "你好", "start": 0.2, "end": 0.9, "p": 0.9}]
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("model", "lang", "dtw", "prompt"),
+    [("ggml-large-v3-turbo.bin", "auto", "large.v3.turbo", False), ("ggml-base.bin", "auto", "base", True),
+     ("ggml-base.bin", "zh", "base", True), ("ggml-base.bin", "en", "base", False)],
+)
+def test_whisper_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model: str, lang: str, dtw: str,
+                         prompt: bool) -> None:
+    """词级模式必须 -nfa + -dtw <预设> + -ojf；base 模型中文/自动语种加简体提示；原始 JSON 原子写进缓存。"""
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: object) -> SimpleNamespace:
+        seen.append(cmd)
+        Path(cmd[cmd.index("-of") + 1] + ".json").write_text(json.dumps(_doc([_tok("hi", 50)])))
+        return SimpleNamespace(returncode=0, stderr=b"")
+
+    monkeypatch.setattr(T, "_extract_wav", lambda src, track, dst: None)
+    monkeypatch.setattr(T.subprocess, "run", fake_run)
+    raw = tmp_path / "cache" / "whisper.json"
+    media = SimpleNamespace(path=tmp_path / "x.mp4", duration=10.0)
+    T._run_whisper(media, "whisper-cli", tmp_path / model, lang, None, raw)  # type: ignore[arg-type]
+    cmd = seen[0]
+    assert cmd[cmd.index("-dtw") + 1] == dtw and "-nfa" in cmd and "-ojf" in cmd and "-np" in cmd
+    assert cmd[cmd.index("-l") + 1] == lang
+    assert ("--prompt" in cmd) == prompt
+    assert json.loads(raw.read_text())["transcription"]
+
+
 # ------------------------------------------------------------------ 真实素材
 
 
@@ -229,3 +257,15 @@ def test_lecture_en_words_are_whole_words(media: Path, asr_cache: Path) -> None:
     assert "execution" in texts and "let's" in texts and "gulf" in texts
     assert all(not t.startswith(" ") for t in texts)
     assert not any(t in ("g", "ulf") for t in texts)  # 子词已合并
+
+
+@pytest.mark.unit
+def test_words_cache_name_changes_with_parse_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """改了解析/吸附逻辑（PARSE_VERSION +1）后，旧的文字稿缓存不能再命中。"""
+    from autocut.analysis import words_cache_name
+
+    monkeypatch.setattr(T, "model_tag", lambda: "large-v3-turbo")
+    before = words_cache_name("zh", 1)
+    monkeypatch.setattr(T, "PARSE_VERSION", T.PARSE_VERSION + 1)
+    after = words_cache_name("zh", 1)
+    assert before != after and after.startswith("words-zh-t1-large-v3-turbo-p")

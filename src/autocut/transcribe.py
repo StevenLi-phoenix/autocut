@@ -60,6 +60,8 @@ _ZH_PROMPT = "以下是普通话的句子。"
 _SMALL_MODELS = ("tiny", "base", "small")
 
 SR = 16000  # whisper 只吃 16 kHz
+# 解析与词边界吸附逻辑的版本：改了 words_from_whisper 或下面的吸附参数就加 1，analysis 的文字稿缓存随之失效
+PARSE_VERSION = 1
 # 词边界吸附用的语音检测：停顿短于此并入语音（字间的塞音闭塞一般更短）。cut 配方用同一份结果
 SNAP_MIN_SILENCE = 0.15
 # 词的结束时间落在静音里时：下一个语音段在这么近的地方开始，就归给它（t_dtw 偏早约 150ms，最差 270ms）

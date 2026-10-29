@@ -35,7 +35,7 @@
 ### Plan（`src/autocut/plan.py`）
 直接读源码，docstring 就是规范。要点：
 - `Plan.sources: dict[id, Source]`；`Plan.outputs: list[Output]`；`Output.segments` 按列表顺序拼接 `action == "keep"` 的片段。
-- **剪辑类配方**（cut、highlights 的每一条）：segments 覆盖素材的连续时间段，保留和剪掉交替出现，相邻片段首尾相接。这样审阅页才能一键改回保留，`move_boundary` 也能同时挪动邻居。
+- **剪辑类配方**（cut、highlights 的每一条）：segments 覆盖素材的连续时间段，相邻片段首尾相接。这样审阅页才能一键改回保留，`move_boundary` 也能同时挪动邻居。不要求剪和留严格交替：可以保留接保留（说话后接一段按节奏保留的停顿），也可以剪接剪（长停顿后接一段重说），这样把重说改回保留时，停顿仍按节奏留。render 不给首尾相接的同源片段加淡入淡出，所以听不出接缝。
 - **组装类配方**（montage、ytpmv、narrate）：segments 只放保留的片段，按输出顺序排列，用 `slot` 指定在输出里占多长（卡点）。
 - 每个片段都要有 `reason`（取值见 `REASONS`）、`confidence`（0–1，低于 0.75 算拿不准）、`detail`（给人看的一句话，中文，例如"停顿 2.6s → 保留 0.4s"）。有文字稿时 `text` 写这段说了什么。`evidence` 放判断用到的数值。
 - 片段 id 在一个 output 内唯一，用 `new_segment_id(prefix, n)` 生成，例如 `d001`。
