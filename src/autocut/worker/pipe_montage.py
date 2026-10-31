@@ -158,6 +158,7 @@ def run_montage(ctx: Ctx, *, gateway: Gateway | None = None) -> dict[str, Any]:
             by_slot[k] = p
             used.add(p["shot"])
     cat = {c["id"]: c for c in catalog}
+    descs: dict[str, Any] = {}  # 每个素材只解码一次（describe_video 要把整段视频解成小图，长素材要几十秒）
     kept_default, replaced = 0, 0
     for i, seg in enumerate(out.segments, 1):
         p = by_slot.get(i)
@@ -166,7 +167,9 @@ def run_montage(ctx: Ctx, *, gateway: Gateway | None = None) -> dict[str, Any]:
             continue
         c = cat[p["shot"]]
         m = medias[c["src"]]
-        desc = describe_video(m.path, m.duration, m.cuts())
+        if c["src"] not in descs:
+            descs[c["src"]] = describe_video(m.path, m.duration, m.cuts())
+        desc = descs[c["src"]]
         wins = windows_for(seg.slot, [[(c["a"], c["b"])] if sid == c["src"] else [] for sid in src_ids], [desc] * len(src_ids))
         wins = [w for w in wins if src_ids[w.src] == c["src"]]
         if not wins:
