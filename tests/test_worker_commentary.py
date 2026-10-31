@@ -127,7 +127,7 @@ class FakeGateway(BaseHTTPRequestHandler):
         n = int(self.headers["Content-Length"])
         req = json.loads(self.rfile.read(n))
         FakeGateway.seen.append(req)
-        FakeGateway.spend += 0.05  # 每次调用 $0.05
+        FakeGateway.spend += 0.05  # 每次调用 $0.05（网关差值）
         text = FakeGateway.replies.pop(0) if FakeGateway.replies else "{}"
         body = json.dumps({"choices": [{"message": {"content": text}, "finish_reason": "stop"}], "usage": {"total_tokens": 100}}).encode()
         self.send_response(200)
@@ -239,3 +239,39 @@ def test_tts_failure_is_reported_not_silent(tmp_path: Path, monkeypatch: pytest.
     with pytest.raises(TTSError):
         t.synth_many(["a", "b", "c"])
     srv.shutdown()
+
+
+def test_spend_uses_max_of_gateway_delta_and_token_estimate(fake_gw: WorkerConfig, tmp_path: Path) -> None:
+    """网关 spend 结算有延迟（差值常为 0）：花费取 max(差值, 按 token 的估价)，预算不能被低估。"""
+    from autocut.worker.llm import estimate_usd
+
+    assert estimate_usd("claude-sonnet-5-5", {"prompt_tokens": 1_000_000, "completion_tokens": 100_000}) == pytest.approx(4.5)
+    assert estimate_usd("unknown-model", {"total_tokens": 1_000_000}) == pytest.approx(3.0)
+    gw = Gateway(fake_gw, tmp_path / "job", 100.0)
+    FakeGateway.spend = 0.0
+    orig = FakeGateway.do_POST
+
+    def no_spend(self):  # 模拟结算延迟：差值为 0
+        orig(self)
+        FakeGateway.spend = 0.0
+
+    FakeGateway.do_POST = no_spend  # type: ignore[method-assign]
+    try:
+        FakeGateway.replies = ["{}"]
+        r = gw.chat("claude-sonnet-5-5", [{"role": "user", "content": "x"}], purpose="t")
+    finally:
+        FakeGateway.do_POST = orig  # type: ignore[method-assign]
+    assert r["usd"] > 0 and gw.spent_usd() == pytest.approx(r["usd"])
+
+
+def test_claude_request_params(fake_gw: WorkerConfig, tmp_path: Path) -> None:
+    """Claude 5 系列：不传 temperature；sonnet/opus 关掉预思考（否则正文为空）；haiku 不能带 thinking 参数。"""
+    gw = Gateway(fake_gw, tmp_path / "job", 100.0)
+    FakeGateway.replies = ["{}", "{}", "{}"]
+    gw.chat("claude-sonnet-5-5", [{"role": "user", "content": "x"}], purpose="a", temperature=0.7)
+    gw.chat("claude-haiku-5-5", [{"role": "user", "content": "x"}], purpose="b", temperature=0.7)
+    gw.chat("deepseek-flash", [{"role": "user", "content": "x"}], purpose="c", temperature=0.7)
+    s, h, d = FakeGateway.seen[-3:]
+    assert "temperature" not in s and s["thinking"] == {"type": "between_tools"}
+    assert "temperature" not in h and "thinking" not in h
+    assert d["temperature"] == 0.7 and "thinking" not in d

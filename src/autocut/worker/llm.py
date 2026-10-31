@@ -22,7 +22,20 @@ from autocut.worker.config import WorkerConfig, load_secrets
 from autocut.worker.store import atomic_write_json, read_json
 
 log = logging.getLogger(__name__)
-EST_USD_PER_MTOK = 3.0  # 查不到网关花费时的保守估价（美元/百万 token，输入输出同价）
+# 美元/百万 token（输入, 输出）：按 token 数的保守估价。网关 /api/me 的 spend 结算有延迟（实测大多数调用的差值是 0），
+# 所以每次花费取 max(网关差值, 估价)，预算宁可高估也不低估。
+PRICE_USD_PER_MTOK = {"claude-haiku-5-5": (1.0, 5.0), "claude-sonnet-5-5": (3.0, 15.0), "deepseek-flash": (0.3, 1.2), "deepseek-v4-pro": (0.6, 2.4)}
+DEFAULT_PRICE = (3.0, 15.0)
+THINKING_OFF = {"claude-sonnet-5-5", "claude-opus-5-5"}
+
+
+def estimate_usd(model: str, usage: dict[str, Any]) -> float:
+    pin, pout = PRICE_USD_PER_MTOK.get(model, DEFAULT_PRICE)
+    ti = usage.get("prompt_tokens") or 0
+    to = usage.get("completion_tokens") or 0
+    if not ti and not to:
+        ti = usage.get("total_tokens") or 0
+    return (ti * pin + to * pout) / 1e6
 
 
 class LLMError(Exception):
@@ -80,6 +93,8 @@ class Gateway:
         body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if not model.startswith("claude"):  # Claude 5 系列网关会拒绝 temperature（400 deprecated）
             body["temperature"] = temperature
+        if model in THINKING_OFF:  # sonnet/opus 5.5 默认先长时间思考，3000 token 全花在思考上、正文为空（实测）；haiku 不支持这个参数
+            body["thinking"] = {"type": "between_tools"}
         if json_mode:
             body["response_format"] = {"type": "json_object"}
         seq = len(list(self.dir.glob("*.json"))) + 1
@@ -113,10 +128,9 @@ class Gateway:
         else:
             raise last or LLMError("llm_call_failed", "未知失败")
         after = self._gateway_spend()
+        usd = estimate_usd(model, usage)
         if before is not None and after is not None and after >= before:
-            usd = after - before
-        else:
-            usd = (usage.get("total_tokens") or 0) * EST_USD_PER_MTOK / 1e6
+            usd = max(usd, after - before)
         self._add_spend(usd, purpose, model)
         log.info("LLM %s model=%s tokens=%s usd=%.5f（累计 ¥%.3f / ¥%g）%.1fs", purpose, model, usage.get("total_tokens"), usd, self.spent_cny(), self.budget_cny, time.perf_counter() - t0)
         if not text and data["choices"][0].get("finish_reason") == "length":
