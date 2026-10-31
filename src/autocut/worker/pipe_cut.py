@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from autocut.worker import delivery, ingest
@@ -17,6 +18,29 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
+
+
+UNCERTAIN_BELOW = 0.75
+
+
+def guard_uncertain(plan_path: Path, below: float) -> dict[str, Any]:
+    """无人核对时的保守策略：置信度低于阈值的"剪"全部改回"留"（宁可多留，不要把话剪断）。就地改方案，revision +1。"""
+    from autocut.plan import Plan  # noqa: PLC0415
+
+    plan = Plan.load(plan_path)
+    n, secs = 0, 0.0
+    for seg in plan.output().segments:
+        if seg.action == "cut" and seg.confidence < below and not seg.locked:
+            seg.action = "keep"
+            seg.detail = f"{seg.detail}（流水线保守策略：把握度 {seg.confidence:.2f} < {below}，改为保留）".strip()
+            seg.evidence["guard_restored"] = True
+            n += 1
+            secs += seg.out_duration
+    if n:
+        plan.notes.append(f"流水线保守策略：{n} 处把握度低于 {below} 的剪法改回保留，多保留 {secs:.1f}s（无人逐条核对时宁可多留）")
+        plan.save()
+    log.info("guard：%s 处改回保留 %.1fs（阈值 %.2f）", n, secs, below)
+    return {"restored": n, "seconds": round(secs, 1), "below": below}
 
 
 def pick_source(ctx: Ctx) -> str:
@@ -49,6 +73,11 @@ def run_cut(ctx: Ctx) -> dict[str, Any]:
     cut = ctx.autocut("cut", args)
     summ = cut.get("summary", {})
 
+    guard = {"restored": 0, "seconds": 0.0}
+    if o.get("conservative", True):
+        ctx.stage("guard", "拿不准的剪法一律改成保留")
+        guard = guard_uncertain(ctx.path(plan), float(o.get("uncertain_below", UNCERTAIN_BELOW)))
+
     ctx.stage("check-plan", platform)
     chk = ctx.autocut("check", [plan, "--platform", platform, "--no-asr"], allow_fail=True)
 
@@ -69,7 +98,7 @@ def run_cut(ctx: Ctx) -> dict[str, Any]:
     risks = [i for i in (chk.get("items") or []) if i.get("severity") in ("risk", "warn")][:5] if chk.get("ok") else []
     summary_lines = [
         f"{summ.get('source_span', 0):.0f}s → {summ.get('duration', 0):.0f}s，剪掉 {summ.get('removed', 0):.0f}s（{summ.get('cut', {})}）",
-        f"拿不准 {summ.get('uncertain_total', 0)} 处（已按自动判断处理，没有逐条人工核对）",
+        f"拿不准 {summ.get('uncertain_total', 0)} 处，其中 {guard['restored']} 处剪法被保守策略改回保留（多保留 {guard['seconds']:.0f}s），没有逐条人工核对",
         f"出片核验：{verify}",
     ]
     if chk.get("ok") and risks:
@@ -81,7 +110,7 @@ def run_cut(ctx: Ctx) -> dict[str, Any]:
           "extras": [p for p in (f"{out_dir}/{final.stem}.srt",) if (ctx.dir / p).exists()]}
     delivery.mark_awaiting(ctx.app.store, ctx.job_id, [dv], summary)
     return {"ok": True, "deliverables": [dv], "preview": prev, "summary": summary, "state": "awaiting_confirmation",
-            "cut": {"plan": plan, "summary": {k: summ.get(k) for k in ("source_span", "duration", "removed", "cut", "uncertain_total", "degraded")}},
+            "guard": guard, "cut": {"plan": plan, "summary": {k: summ.get(k) for k in ("source_span", "duration", "removed", "cut", "uncertain_total", "degraded")}},
             "next": [{"cmd": f"autocut-remote fetch {ctx.job_id} {dv['preview']}", "why": "把预览下载到本机再 wechat_send_file 发给用户确认"}]}
 
 

@@ -50,7 +50,7 @@ def test_cut_pipeline_end_to_end(app: App, media: Path) -> None:
     assert (d / dv["final"]).stat().st_size > 10_000
     assert (d / dv["preview"]).stat().st_size <= delivery.PREVIEW_MAX_BYTES
     assert "转载自 某人《测试》" in res["summary"]
-    assert [s["name"] for s in r["stages"]] == ["cut", "check-plan", "render", "preview"]
+    assert [s["name"] for s in r["stages"]] == ["cut", "guard", "check-plan", "render", "preview"]
     assert delivery.state(app.store, job)["status"] == "awaiting_confirmation"
 
 
@@ -71,3 +71,21 @@ def test_cut_pipeline_without_source_fails_with_fix(app: App) -> None:
     job = app.store.create_job("cut", {})["id"]
     r = wait(app, job, app.pipelines["cut"](app, job, {})["id"], 30)
     assert r["status"] == "failed" and r["result"]["error"]["code"] == "no_source" and r["result"]["error"]["fix"]
+
+
+def test_guard_uncertain_restores_low_confidence_cuts(tmp_path: Path) -> None:
+    from autocut.plan import Output, Plan, Segment, Source
+    from autocut.worker.pipe_cut import guard_uncertain
+
+    segs = [Segment("d1", "a", 0, 2, "keep", "speech", 1.0), Segment("d2", "a", 2, 4, "cut", "silence", 0.5),
+            Segment("d3", "a", 4, 6, "cut", "silence", 0.9), Segment("d4", "a", 6, 7, "cut", "retake", 0.7, locked=True)]
+    plan = Plan("cut", {"a": Source("a", "a.mp4", "video", 7.0)}, [Output("main", segs)])
+    p = tmp_path / "p.autocut.json"
+    plan.save(p)
+    r = guard_uncertain(p, 0.75)
+    assert r["restored"] == 1 and r["seconds"] == 2.0
+    again = Plan.load(p)
+    acts = {s.id: s.action for s in again.output().segments}
+    assert acts == {"d1": "keep", "d2": "keep", "d3": "cut", "d4": "cut"}  # 高置信和锁定的不动
+    assert any("保守策略" in n for n in again.notes) and again.revision == 2
+    assert guard_uncertain(p, 0.75)["restored"] == 0  # 幂等
