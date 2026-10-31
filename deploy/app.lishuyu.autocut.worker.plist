@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>app.lishuyu.autocut.worker</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/lishuyu/.local/libexec/tcc-host/tcc-host</string>
+		<string>run</string>
+		<string>autocut-worker</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>AUTOCUT_WORKER_ROOT</key>
+		<string>/Volumes/MiniSSD/autocut</string>
+		<key>AUTOCUT_WORKER_PORT</key>
+		<string>8102</string>
+		<key>AUTOCUT_WORKER_FFMPEG_DIR</key>
+		<string>/Users/lishuyu/.local/opt/kaorou-ffmpeg/bin</string>
+		<key>AUTOCUT_WORKER_INGEST_PYTHON</key>
+		<string>/Users/lishuyu/Codes/translate_upload_yt_bilibili/.venv/bin/python</string>
+		<key>AUTOCUT_WORKER_INGEST_ENV_FILE</key>
+		<string>/Users/lishuyu/Codes/translate_upload_yt_bilibili/.env</string>
+		<key>AUTOCUT_WHISPER_MODEL</key>
+		<string>/Volumes/MiniSSD/autocut/models</string>
+		<key>AUTOCUT_WHISPER_CLI</key>
+		<string>/opt/homebrew/bin/whisper-cli</string>
+		<key>AUTOCUT_ENCODER</key>
+		<string>libx264</string>
+		<key>TMPDIR</key>
+		<string>/Volumes/MiniSSD/autocut/_worker/tmp</string>
+		<key>PATH</key>
+		<string>/Users/lishuyu/.local/opt/kaorou-ffmpeg/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>20</integer>
+	<key>StandardOutPath</key>
+	<string>/Users/lishuyu/services/autocut/logs/worker.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/lishuyu/services/autocut/logs/worker.err.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/lishuyu/services/autocut</string>
+</dict>
+</plist>
