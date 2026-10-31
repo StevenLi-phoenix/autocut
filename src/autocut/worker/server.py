@@ -146,9 +146,7 @@ class App:
 
             meta = d / "work" / f"ingest-{int(time.time())}.json"
             full = [self.cfg.ingest_python, str(Path(ingest_ytdlp.__file__)), "--url", str(url), "--out", str(d / "src"), "--meta", str(meta)]
-            run = self.runner.submit_raw(job_id, "ingest", "ingest", full, heavy=False, env=ingest.ingest_env(self.cfg), note=str(body.get("note", "")))
-            run["args"] = [str(url)]
-            self.store.save_run(job_id, run)
+            run = self.runner.submit_raw(job_id, "ingest", "ingest", full, heavy=False, env=ingest.ingest_env(self.cfg), note=str(body.get("note", "")), args=[str(url)])
             return self._run_brief(run)
         if inbox:
             e = ingest.from_inbox(self.cfg, self.store, job_id, str(inbox))

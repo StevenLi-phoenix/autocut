@@ -417,3 +417,22 @@ def test_http_confirm_flow_blocks_agent_shortcut(http: Any, app: App) -> None:
     assert code == 200
     code, b, _ = http("POST", f"/v1/jobs/{job}/handoff", {"to": "local"})
     assert code == 200 and b["ok"]
+
+
+def test_concurrent_run_saves_do_not_collide(app: App) -> None:
+    """多个线程同时写同一个 run 记录（提交线程 + 执行线程）不能因为临时文件重名而丢失。"""
+    job = app.store.create_job("t", {})["id"]
+    run = {"id": "r-000000-bbbbbb", "job": job, "status": "queued"}
+    errs: list[Exception] = []
+
+    def hammer() -> None:
+        try:
+            for i in range(200):
+                app.store.save_run(job, {**run, "n": i})
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+
+    ts = [threading.Thread(target=hammer) for _ in range(6)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert not errs and app.store.get_run(job, run["id"])["status"] == "queued"

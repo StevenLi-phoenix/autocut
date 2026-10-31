@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import secrets
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -27,8 +28,9 @@ SUBDIRS = ("src", "work", "out", ".runs")
 
 
 def atomic_write_json(path: Path, data: Any) -> None:
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")  # 多线程同时写同一个文件时临时名不能重复
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
     os.replace(tmp, path)
 
 

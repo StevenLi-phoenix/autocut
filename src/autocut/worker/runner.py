@@ -63,11 +63,11 @@ class Runner:
         full = [*self.cfg.autocut_cmd, "-v", cmd, *argv]
         return self._start(job_id, "autocut", cmd, argv, full, heavy=is_heavy(cmd), cwd=job_dir, env=build_env(self.cfg), note=note)
 
-    def submit_raw(self, job_id: str, kind: str, label: str, full: list[str], *, heavy: bool, env: dict[str, str], note: str = "") -> dict[str, Any]:
+    def submit_raw(self, job_id: str, kind: str, label: str, full: list[str], *, heavy: bool, env: dict[str, str], note: str = "", args: list[str] | None = None) -> dict[str, Any]:
         """给 ingest / pipeline 用：命令已由 worker 自己构造，不经白名单。"""
         job_dir = self.store.job_dir(job_id)
         self.store.get_job(job_id)
-        return self._start(job_id, kind, label, [], full, heavy=heavy, cwd=job_dir, env=env, note=note)
+        return self._start(job_id, kind, label, args or [], full, heavy=heavy, cwd=job_dir, env=env, note=note)
 
     def get(self, job_id: str, run_id: str, wait: float = 0.0) -> dict[str, Any]:
         deadline = time.monotonic() + max(0.0, min(wait, 120.0))
