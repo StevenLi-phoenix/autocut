@@ -23,6 +23,8 @@ def main() -> int:
     ap.add_argument("--meta", required=True)
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s %(levelname)s %(message)s")
+    out = sys.stdout
+    sys.stdout = sys.stderr  # yt-dlp / ffmpeg 会往 stdout 打进度，结果 JSON 只走真正的 stdout
     t0 = time.perf_counter()
     try:
         from yt2bili.download import download_video  # noqa: PLC0415 —— 只在烤肉 venv 里存在
@@ -30,7 +32,7 @@ def main() -> int:
         r = download_video(a.url, Path(a.out), None, None)
     except Exception as e:  # noqa: BLE001
         print(json.dumps({"ok": False, "error": {"code": "download_failed", "message": f"{type(e).__name__}: {e}"[:600],
-                                                  "fix": "换链接，或稍后重试；YouTube 反爬问题见烤肉的 cookies / PO-Token 服务", "retry": True}}, ensure_ascii=False))
+                                                  "fix": "换链接，或稍后重试；YouTube 反爬问题见烤肉的 cookies / PO-Token 服务", "retry": True}}, ensure_ascii=False), file=out)
         return 1
     meta = {
         "ok": True, "video_path": str(r.video_path), "video_id": r.video_id, "title": r.title, "channel": r.channel,
@@ -40,7 +42,7 @@ def main() -> int:
         "elapsed_s": round(time.perf_counter() - t0, 1),
     }
     Path(a.meta).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps(meta, ensure_ascii=False))
+    print(json.dumps(meta, ensure_ascii=False), file=out)
     return 0
 
 
