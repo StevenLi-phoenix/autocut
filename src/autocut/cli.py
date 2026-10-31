@@ -2389,6 +2389,9 @@ def _verify_render(plan: Plan, o: Output, r: Any, plan_arg: str) -> dict[str, An
     elif any(b.role == "music" for b in o.beds) and audible:
         v["joints_mid_speech"] = None
         v["mid_speech_skipped"] = "成片里有 BGM，语音检测分不开人声和音乐，没有检查接缝"
+    elif any(b.role == "narration" for b in o.beds) and audible:
+        v["joints_mid_speech"] = None
+        v["mid_speech_skipped"] = "成片里有配音解说，语音检测分不开原声和解说（解说在接缝处连续，不会被剪断），没有检查接缝；原声的接缝要在加解说之前核验"
     else:
         regions = Media(r.path).speech().regions if audible else ()
         mid = [t for t in audible if any(s + JOINT_MARGIN < t < e - JOINT_MARGIN for s, e in regions)]

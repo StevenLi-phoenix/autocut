@@ -442,3 +442,16 @@ def test_seams_to_restore_maps_flagged_seam_to_the_cut_segment_between() -> None
     plan = Plan("cut", {"a": Source("a", "a.mp4", "video", 30.0)}, [Output("main", segs)])  # 成片：d1 0–10，d3 10–19，d5 19–27
     assert seams_to_restore(plan, [10.0]) == ["d2"] and seams_to_restore(plan, [19.02]) == ["d4"]
     assert seams_to_restore(plan, [10.0, 19.0]) == ["d2", "d4"] and seams_to_restore(plan, [0.0]) == []
+
+
+def test_verify_skips_seam_check_when_narration_is_mixed_in(app: App, media: Path, tmp_path: Path) -> None:
+    """有配音解说时，成片里的"语音"是解说，检测不出原声的接缝：核验如实标明跳过（原声接缝在加解说之前已核验并自愈），不是放宽。"""
+    from autocut.worker import pipe_commentary  # noqa: PLC0415
+    from autocut.worker.pipeline import start  # noqa: PLC0415
+
+    job = _commentary_job(app, media)
+    wait(app, job, start(app, job, "commentary_prepare", {}, lambda c: pipe_commentary.run_prepare(c))["id"])
+    script = {"title": "t", "lines": [{"at": 1.0, "text": "开场先看这一手"}, {"at": 8.0, "text": "这里对面开团了"}]}
+    r = wait(app, job, start(app, job, "commentary_finish", {"script": script}, lambda c: pipe_commentary.run_finish(c, tts=_FakeTTS(tmp_path)))["id"])
+    assert r["status"] == "ok", r.get("result")
+    assert "没有检查接缝" in r["result"]["summary"] or "配音解说" in r["result"]["summary"] or "通过" in r["result"]["summary"]

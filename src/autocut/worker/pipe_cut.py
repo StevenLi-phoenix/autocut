@@ -222,7 +222,8 @@ def _verify(ren: dict[str, Any]) -> str:
     r0 = outs[0]
     v = r0.get("verify") or {}
     if v.get("verified"):
-        return f"通过（时长漂移 {v.get('av_drift')}s，{v.get('joints')} 个接缝，{v.get('joints_mid_speech')} 个落在说话中间）"
+        mid = f"{v.get('joints_mid_speech')} 个落在说话中间" if v.get("joints_mid_speech") is not None else f"接缝检查跳过：{v.get('mid_speech_skipped')}"
+        return f"通过（时长漂移 {v.get('av_drift')}s，{v.get('joints')} 个接缝，{mid}）"
     return f"未通过 {r0.get('warnings') or v}"
 
 

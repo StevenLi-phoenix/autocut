@@ -43,7 +43,7 @@ def run_prepare(ctx: Ctx) -> dict[str, Any]:
     ctx.stage("cut", f"{src}（实况模式去停顿）")
     ctx.autocut("cut", [src, "--pace", str(o.get("pace", "natural")), "-o", plan_rel, "--force"])
     guard = guard_mid_sentence(ctx.path(plan_rel))  # 规则校验层：停在句子中间的剪法改回保留；其余沿用配方的实况去停顿提案
-    _ren, healed = heal_seams(ctx, plan_rel, "work/seamcheck", "-14")  # 先把接缝问题在去停顿阶段解决（解说时间轴要在这之后定）
+    seam_ren, healed = heal_seams(ctx, plan_rel, "work/seamcheck", "-14")  # 先把接缝问题在去停顿阶段解决（解说时间轴要在这之后定）
     plan = Plan.load(ctx.path(plan_rel))
     out = plan.output()
     D = round(out.duration, 2)
@@ -80,7 +80,7 @@ def run_prepare(ctx: Ctx) -> dict[str, Any]:
         "how": "sheets 是带编号和时间标签的关键帧拼图：用 ar fetch 拉到本机再 read_image 看（没看清用 ar frame JOB t=秒 取单帧）；按画面和原声写解说稿，用 ar pipeline JOB commentary_finish script_file=work/script.json（先把稿子写成 JSON 文件上传到 job 的 work/ 目录）或 script='{...}' 提交",
     }
     (ctx.dir / "work" / f"{stem}.brief.json").write_text(json.dumps(brief, ensure_ascii=False, indent=1), encoding="utf-8")
-    return {"ok": True, "state": "needs_agent", "needs": "script", "brief": brief, "guard": guard, "healed": healed, "plan": plan_rel,
+    return {"ok": True, "state": "needs_agent", "needs": "script", "brief": brief, "guard": guard, "healed": healed, "seams_after_heal": ((seam_ren.get("results") or [{}])[0].get("verify") or {}).get("joints_mid_speech"), "plan": plan_rel,
             "next": [{"cmd": f"autocut-remote pipeline {ctx.job_id} commentary_finish script='{{\"title\":\"…\",\"lines\":[{{\"at\":1.5,\"text\":\"…\"}}]}}'", "why": "写好解说稿后提交（程序校验、配音、混音、出片）"}]}
 
 
