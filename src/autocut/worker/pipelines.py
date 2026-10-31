@@ -12,4 +12,7 @@ def register(app: App) -> None:
     """把各流水线挂到 app.pipelines。"""
     from autocut.worker import pipe_cut
 
+    from autocut.worker import pipe_commentary
+
     app.pipelines["cut"] = pipe_cut.pipeline_cut
+    app.pipelines["commentary"] = pipe_commentary.pipeline_commentary

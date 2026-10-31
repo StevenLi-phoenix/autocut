@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -90,3 +92,71 @@ def test_guard_uncertain_restores_low_confidence_cuts(tmp_path: Path) -> None:
     assert acts == {"d1": "keep", "d2": "keep", "d3": "cut", "d4": "cut", "d5": "keep"}  # 高置信和锁定的不动
     assert any("保守策略" in n for n in again.notes) and again.revision == 2
     assert guard_uncertain(p, 0.75)["restored"] == 0  # 幂等
+
+
+# ------------------------------------------------------------------ commentary（假 LLM / 假 TTS，真 cut / render）
+
+
+class _FakeGW:
+    """按 purpose 返回固定内容；记录调用，验证流水线给模型的是画面描述 + 原声，而不是别的。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Any]] = []
+
+    def chat_json(self, model, messages, *, purpose, validate=None, **kw):
+        self.calls.append((purpose, messages))
+        if purpose == "vision":
+            n = sum(1 for p in messages[0]["content"] if p.get("type") == "image_url")
+            out = {"frames": [{"i": i + 1, "desc": f"画面{i + 1}：角色在移动"} for i in range(n)]}
+        elif purpose == "script":
+            out = {"title": "测试标题", "lines": [{"at": 1.0, "text": "开场先看这一手"}, {"at": 8.0, "text": "这里对面开团了"}, {"at": 16.0, "text": "漂亮的收尾"}]}
+        else:
+            out = {"lines": []}
+        if validate:
+            validate(out)
+        return out
+
+    def spent_cny(self) -> float:
+        return 0.123
+
+
+class _FakeTTS:
+    stats = {"hit": 0, "miss": 3}
+
+    def __init__(self, tmp: Path) -> None:
+        self.tmp = tmp
+
+    def synth_many(self, lines, *, voice, lang):
+        from test_worker_commentary import _tone_wav  # noqa: PLC0415
+
+        res = []
+        for i, t in enumerate(lines):
+            p = _tone_wav(self.tmp / f"tts{abs(hash(t))}.wav", 1.2)
+            res.append((p, 1.2, "mini"))
+        return res
+
+
+def test_commentary_pipeline_end_to_end_with_fakes(app: App, media: Path, tmp_path: Path) -> None:
+    from autocut.worker import pipe_commentary
+    from autocut.worker.pipeline import start
+
+    job = app.store.create_job("game", {"budget_cny": 2.0})["id"]
+    shutil.copy(media / "game_commentary.mp4", app.store.job_dir(job) / "src" / "game.mp4")
+    ingest.register_source(app.store, job, {"kind": "upload", "file": "src/game.mp4"})
+    gw, tts = _FakeGW(), _FakeTTS(tmp_path)
+    run = start(app, job, "commentary", {"game": "测试游戏"}, lambda ctx: pipe_commentary.run_commentary(ctx, gateway=gw, tts=tts))
+    r = wait(app, job, run["id"])
+    assert r["status"] == "ok", r.get("result")
+    res = r["result"]
+    d = app.store.job_dir(job)
+    dv = res["deliverables"][0]
+    assert (d / dv["final"]).stat().st_size > 10_000 and (d / dv["preview"]).stat().st_size <= delivery.PREVIEW_MAX_BYTES
+    assert [s["name"] for s in r["stages"]][:5] == ["cut", "vision", "script", "tts", "mix"]
+    assert "3 句解说" in res["summary"] and "¥0.123" in res["summary"] and res["title"] == "测试标题"
+    plan = json.loads((d / "work" / "game.commentary.autocut.json").read_text())
+    bed = plan["outputs"][0]["beds"][0]
+    assert bed["role"] == "narration" and bed["duck_main_db"] == 14.0 and plan["outputs"][0]["captions"]["burn"] is True
+    # 模型收到了画面描述，没收到别的
+    assert any(p == "script" and "画面1" in m[0]["content"] for p, m in gw.calls)
+    # 成片音频里解说确实混进去了：有 srt 字幕
+    assert (d / "out" / "game.commentary.srt").exists() or any(x.endswith(".srt") for x in dv["extras"])

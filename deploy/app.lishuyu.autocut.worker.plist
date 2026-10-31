@@ -26,6 +26,8 @@
 		<string>/Volumes/MiniSSD/autocut/models</string>
 		<key>AUTOCUT_WHISPER_CLI</key>
 		<string>/opt/homebrew/bin/whisper-cli</string>
+		<key>AUTOCUT_WORKER_SECRETS_FILE</key>
+		<string>/Users/lishuyu/services/autocut/worker.env</string>
 		<key>AUTOCUT_ENCODER</key>
 		<string>libx264</string>
 		<key>TMPDIR</key>

@@ -35,7 +35,7 @@ def build_env(cfg: WorkerConfig) -> dict[str, str]:
         "NO_COLOR": "1",
         "PYTHONUNBUFFERED": "1",
     }
-    for k in ("AUTOCUT_WHISPER_MODEL", "AUTOCUT_WHISPER_CLI", "TMPDIR"):
+    for k in ("AUTOCUT_WHISPER_MODEL", "AUTOCUT_WHISPER_CLI", "TMPDIR", "PYTHONPATH"):
         if os.environ.get(k):
             env[k] = os.environ[k]
     env.update(cfg.extra_env)

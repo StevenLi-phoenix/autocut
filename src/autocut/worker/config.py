@@ -12,6 +12,22 @@ DEFAULT_PORT = 8102
 RESERVED_NAMES = {"models", "_worker", "inbox"}  # 不能当 job 名
 
 
+def load_secrets(path: str | None) -> dict[str, str]:
+    """读 KEY=VALUE 的 secrets 文件。值只在内存里，不记日志。"""
+    out: dict[str, str] = {}
+    if not path:
+        return out
+    try:
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip().strip("\"'")
+    except OSError:
+        pass
+    return out
+
+
 @dataclass(frozen=True)
 class WorkerConfig:
     root: Path
@@ -24,6 +40,12 @@ class WorkerConfig:
     nice: int = 10
     ingest_python: str | None = None  # 烤肉 venv 的 python（复用其 yt-dlp / PO-Token / cookies 配置）
     ingest_env_file: str | None = None  # 烤肉 .env；只摘取白名单变量，不整体透传
+    secrets_file: str | None = None  # KEY=VALUE 文件（600）：AUTOCUT_LLM_KEY 等，不进 plist、不进日志
+    llm_base: str = "https://api.lishuyu.app/llm"
+    tts_mini_url: str = "http://127.0.0.1:8098"
+    tts_feiyu_url: str | None = None  # 肥鱼（laptop）；mini 到 laptop 19880 不通时自动回落 mini TTS
+    tts_order: tuple[str, ...] = ("feiyu", "mini")
+    cny_per_usd: float = 7.2
     extra_env: dict[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -41,4 +63,9 @@ class WorkerConfig:
             nice=int(e.get("AUTOCUT_WORKER_NICE", "10")),
             ingest_python=e.get("AUTOCUT_WORKER_INGEST_PYTHON") or None,
             ingest_env_file=e.get("AUTOCUT_WORKER_INGEST_ENV_FILE") or None,
+            secrets_file=e.get("AUTOCUT_WORKER_SECRETS_FILE") or None,
+            llm_base=e.get("AUTOCUT_LLM_BASE", "https://api.lishuyu.app/llm"),
+            tts_mini_url=e.get("AUTOCUT_TTS_MINI_URL", "http://127.0.0.1:8098"),
+            tts_feiyu_url=e.get("AUTOCUT_TTS_FEIYU_URL") or None,
+            tts_order=tuple(x for x in e.get("AUTOCUT_TTS_ORDER", "feiyu,mini").split(",") if x),
         )
