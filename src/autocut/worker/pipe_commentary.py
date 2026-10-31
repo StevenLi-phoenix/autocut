@@ -141,7 +141,7 @@ def run_commentary(ctx: Ctx, *, gateway: Gateway | None = None, tts: TTS | None 
     ctx.stage("check-plan", platform)
     chk = ctx.autocut("check", [cplan_rel, "--platform", platform, "--no-asr"], allow_fail=True)
     ctx.stage("render")
-    ren = ctx.autocut("render", [cplan_rel, "--out-dir", "out", "--force", "--loudnorm", str(o.get("loudnorm", "-16"))])
+    ren = ctx.autocut("render", [cplan_rel, "--out-dir", "out", "--force", "--loudnorm", str(o.get("loudnorm", "-14"))])
     finals = [x for x in ctx.dir.joinpath("out").glob(f"{stem}.commentary*.mp4")]
     if not finals:
         finals = [x for x in ctx.dir.joinpath("out").glob("*.mp4") if "preview" not in x.name]

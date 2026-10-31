@@ -131,7 +131,7 @@ class App:
         out = []
         for p in sorted(base.rglob("*")) if base.is_dir() else []:
             rel = p.relative_to(d)
-            if p.is_file() and not any(part.startswith(".") for part in rel.parts) and p.parent != d:
+            if p.is_file() and not any(part.startswith(".") for part in rel.parts) and p.parent != d and not (rel.parts[0] == "work" and len(rel.parts) > 2):  # work/ 下的帧、LLM 原始响应等子目录不列
                 out.append({"path": str(rel), "bytes": p.stat().st_size})
             if len(out) >= 300:
                 break

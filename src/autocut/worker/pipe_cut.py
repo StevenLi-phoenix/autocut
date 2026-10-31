@@ -90,7 +90,7 @@ def run_cut(ctx: Ctx) -> dict[str, Any]:
 
     ctx.stage("render")
     out_dir = "out"
-    ren = ctx.autocut("render", [plan, "--out-dir", out_dir, "--force", "--loudnorm", str(o.get("loudnorm", "-16"))])
+    ren = ctx.autocut("render", [plan, "--out-dir", out_dir, "--force", "--loudnorm", str(o.get("loudnorm", "-14"))])
     finals = [x for x in ctx.dir.joinpath(out_dir).glob("*.mp4") if "preview" not in x.name]
     if not finals:
         raise PipelineError("no_output", "render 成功但没有找到成片", "看 render 的 JSON", "render")
