@@ -14,5 +14,8 @@ def register(app: App) -> None:
 
     from autocut.worker import pipe_commentary
 
+    from autocut.worker import pipe_clips
+
+    app.pipelines["clips"] = pipe_clips.pipeline_clips
     app.pipelines["cut"] = pipe_cut.pipeline_cut
     app.pipelines["commentary"] = pipe_commentary.pipeline_commentary

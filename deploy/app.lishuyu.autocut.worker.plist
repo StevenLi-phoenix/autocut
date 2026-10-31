@@ -28,6 +28,8 @@
 		<string>/opt/homebrew/bin/whisper-cli</string>
 		<key>AUTOCUT_WORKER_SECRETS_FILE</key>
 		<string>/Users/lishuyu/services/autocut/worker.env</string>
+		<key>AUTOCUT_WORKER_SENSITIVE_WORDS</key>
+		<string>/Users/lishuyu/Codes/translate_upload_yt_bilibili/src/yt2bili/sensitive_words.txt</string>
 		<key>AUTOCUT_ENCODER</key>
 		<string>libx264</string>
 		<key>TMPDIR</key>

@@ -472,3 +472,17 @@ def test_pass_rate_triggers_degraded_mode_below_half(app: App) -> None:
     for _ in range(6):
         delivery._metric(root, "j", "confirmed", n=1)
     assert delivery.pass_rate(root)["degraded_mode"] is False  # 最近 10 条 7/10
+
+
+def test_ingest_helper_detects_truncated_video(tmp_path: Path) -> None:
+    """下载下来视频流比音频短一大截（2026-10-31 实测的 AV1 坏文件）必须被发现。"""
+    import subprocess as sp
+
+    from autocut.worker import ingest_ytdlp as h
+
+    good = tmp_path / "good.mp4"
+    sp.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=d=8:s=160x90:r=10", "-f", "lavfi", "-i", "sine=d=8", "-c:v", "libx264", "-c:a", "aac", "-shortest", str(good)], check=True)
+    assert h.integrity_problem(good) is None
+    bad = tmp_path / "bad.mp4"  # 视频 3s + 音频 8s
+    sp.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=d=3:s=160x90:r=10", "-f", "lavfi", "-i", "sine=d=8", "-c:v", "libx264", "-c:a", "aac", str(bad)], check=True)
+    assert "对不上" in (h.integrity_problem(bad) or "")
