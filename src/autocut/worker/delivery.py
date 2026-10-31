@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -19,7 +20,9 @@ from autocut.worker.policy import PolicyError
 from autocut.worker.store import Store, atomic_write_json, read_json
 
 log = logging.getLogger(__name__)
-PREVIEW_MAX_BYTES = 23 * 1024 * 1024  # 微信文件上限 25 MiB，留余量
+# 微信文件上限 25 MiB，但 mini 到微信 CDN 的上行实测只有约 65 KB/s，lsy-wechat 每次上传 60 秒超时
+# （2026-10-31：22 MiB 和 10 MiB 的预览都超时）。默认压到 8 MiB，可用环境变量 AUTOCUT_PREVIEW_MIB 调整。
+PREVIEW_MAX_BYTES = int(float(os.environ.get("AUTOCUT_PREVIEW_MIB", "8")) * 1024 * 1024)
 REASONS = {"length", "standalone", "boring", "irrelevant", "captions", "copyright", "other"}
 
 
@@ -120,15 +123,15 @@ def pass_rate(root: Path, last: int = 10) -> dict[str, Any]:
 def make_preview(src: Path, dst: Path, *, ffmpeg: str = "ffmpeg", max_bytes: int = PREVIEW_MAX_BYTES) -> dict[str, Any]:
     """压一个 ≤max_bytes 的确认用预览（微信文件上限 25 MiB）。成片本身不动。"""
     dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(src)], capture_output=True, text=True, check=True).stdout.strip())
-    audio = 64_000
+    audio = 40_000  # 单声道 40k：预览只用来核对剪得对不对
     vbr = int(max_bytes * 8 * 0.9 / max(dur, 1.0)) - audio
-    if vbr < 120_000:
-        raise PolicyError("preview_too_long", f"成片 {dur:.0f}s 太长，压不进 {max_bytes // 2**20} MiB 预览", "改发片段预览或截图，并告诉用户完整成片在 mini 上")
-    short_side = 720 if vbr >= 1_000_000 else 540 if vbr >= 500_000 else 360
+    if vbr < 40_000:
+        raise PolicyError("preview_too_long", f"成片 {dur:.0f}s 太长，压不进 {max_bytes / 2**20:.0f} MiB 预览", "改发片段预览或截图，并告诉用户完整成片在 mini 上")
+    short_side = 720 if vbr >= 1_000_000 else 540 if vbr >= 500_000 else 360 if vbr >= 90_000 else 288
     # 横屏限高、竖屏限宽，保持比例，偶数边长
     vf = f"scale='if(gt(iw,ih),-2,min({short_side},iw))':'if(gt(iw,ih),min({short_side},ih),-2)'"
     cmd = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src), "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-b:v", str(vbr),
-           "-maxrate", str(int(vbr * 1.4)), "-bufsize", str(vbr * 2), "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "64k", "-ac", "2", "-movflags", "+faststart", str(dst)]
+           "-maxrate", str(int(vbr * 1.4)), "-bufsize", str(vbr * 2), "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "40k", "-ac", "1", "-movflags", "+faststart", str(dst)]
     t0 = time.perf_counter()
     subprocess.run(cmd, check=True, capture_output=True, timeout=1800)
     size = dst.stat().st_size

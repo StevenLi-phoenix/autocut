@@ -299,7 +299,7 @@ def main() -> int:
     pipelines.register(app)
     from autocut.worker.events import Emitter  # noqa: PLC0415
 
-    emitter = Emitter(cfg)
+    emitter = Emitter(cfg, app.store)
     app.runner.on_finish(emitter)
     log.info("DSH 事件：%s", "已启用 → " + emitter.url if emitter.enabled else "未启用（secrets 里没有 AUTOCUT_DSH_EVENT_TOKEN）")
     srv = make_server(cfg, app)

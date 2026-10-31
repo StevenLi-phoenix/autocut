@@ -36,19 +36,27 @@ def event_for(job_id: str, run: dict[str, Any]) -> dict[str, Any] | None:
 
 
 class Emitter:
-    def __init__(self, cfg: WorkerConfig) -> None:
-        sec = load_secrets(cfg.secrets_file)
-        self.token = sec.get("AUTOCUT_DSH_EVENT_TOKEN", "")
-        self.url = sec.get("AUTOCUT_DSH_EVENT_URL") or DEFAULT_URL
-
     @property
     def enabled(self) -> bool:
         return bool(self.token)
+
+    def __init__(self, cfg: WorkerConfig, jobs: Any = None) -> None:
+        sec = load_secrets(cfg.secrets_file)
+        self.token = sec.get("AUTOCUT_DSH_EVENT_TOKEN", "")
+        self.url = sec.get("AUTOCUT_DSH_EVENT_URL") or DEFAULT_URL
+        self.jobs = jobs  # Store：用来读 job.config.notify
 
     def __call__(self, job_id: str, run: dict[str, Any]) -> None:
         ev = event_for(job_id, run)
         if ev is None:
             return
+        if self.jobs is not None:
+            try:
+                if (self.jobs.get_job(job_id).get("config") or {}).get("notify") is False:
+                    log.info("事件 %s 未发送：job 配置了 notify=false（测试/批处理 job 不打扰用户）", ev["kind"])
+                    return
+            except Exception:  # noqa: BLE001
+                pass
         if not self.enabled:
             log.info("事件 %s 未发送：没有配置 AUTOCUT_DSH_EVENT_TOKEN", ev["kind"])
             return
