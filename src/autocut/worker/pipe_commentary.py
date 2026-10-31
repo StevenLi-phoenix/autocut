@@ -155,7 +155,10 @@ def run_commentary(ctx: Ctx, *, gateway: Gateway | None = None, tts: TTS | None 
                                                  ensure_ascii=False, indent=1), encoding="utf-8")
     spent = gw.spent_cny()
     dropped = [ln for ln in lines if ln.dropped]
+    provs = sorted({ln.provider for ln in kept_lines})
+    degraded_tts = [x for x in provs if x == "say"]
     summary_lines = [
+        "⚠️ 配音降级：TTS 服务不可用，用了 macOS 系统语音（机械感明显），建议等 TTS 恢复后重做" if degraded_tts else "",
         f"解说配音版：{D:.0f}s（去停顿后），{len(kept_lines)} 句解说" + (f"，{len(dropped)} 句放不下被丢弃" if dropped else "") + f"，原声压低 {o.get('duck_db', 14)}dB，字幕{'已烧录' if o.get('burn_captions', True) else '单独文件'}",
         f"标题建议：{title}" if title else "",
         f"出片核验：{_verify(ren)}",

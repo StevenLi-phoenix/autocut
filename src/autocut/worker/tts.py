@@ -59,7 +59,7 @@ class TTS:
         for p in self.cfg.tts_order:
             if p == "feiyu" and self.cfg.tts_feiyu_url and self.feiyu_key:
                 out.append(p)
-            elif p == "mini":
+            elif p in ("mini", "say"):
                 out.append(p)
         return out
 
@@ -108,7 +108,9 @@ class TTS:
         for attempt in range(3):
             t0 = time.perf_counter()
             try:
-                if provider == "mini":
+                if provider == "say":
+                    data = self._say(text, lang)
+                elif provider == "mini":
                     body, ct = _multipart({"text": text, "speaker": voice, "language": lang})
                     req = urllib.request.Request(f"{self.cfg.tts_mini_url}/synthesize", data=body, method="POST", headers={"Content-Type": ct})
                     with urllib.request.urlopen(req, timeout=300) as r:
@@ -126,6 +128,21 @@ class TTS:
                 last = e
                 time.sleep(2 * (attempt + 1))
         raise TTSError(f"{provider}：{last}")
+
+    def _say(self, text: str, lang: str) -> bytes:
+        """macOS 系统语音（最后的退路，机械感明显；调用方必须在摘要里标注降级）。"""
+        v = "Tingting" if lang.lower().startswith("chin") else "Samantha"
+        tmp = self.cache / f".say-{uuid.uuid4().hex}.aiff"
+        out = tmp.with_suffix(".wav")
+        try:
+            subprocess.run(["say", "-v", v, "-o", str(tmp), "--", text], check=True, capture_output=True, timeout=120)
+            subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(tmp), "-ac", "1", "-ar", "24000", str(out)], check=True, capture_output=True, timeout=120)
+            return out.read_bytes()
+        except (subprocess.SubprocessError, OSError) as e:
+            raise TTSError(f"say 失败：{e}") from e
+        finally:
+            tmp.unlink(missing_ok=True)
+            out.unlink(missing_ok=True)
 
     def _feiyu(self, text: str, voice: str, lang: str) -> bytes:
         # 肥鱼 v0.4.0 的 HTTP 契约以服务文档为准；这里按 submit → wait → download 的最小形式留好接口，mini 不通时不会走到这里

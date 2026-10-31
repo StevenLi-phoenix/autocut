@@ -235,7 +235,7 @@ def test_tts_failure_is_reported_not_silent(tmp_path: Path, monkeypatch: pytest.
     srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeTTS)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     monkeypatch.setattr(time, "sleep", lambda s: None)
-    t = TTS(WorkerConfig(root=tmp_path, tts_mini_url=f"http://127.0.0.1:{srv.server_address[1]}"))
+    t = TTS(WorkerConfig(root=tmp_path, tts_mini_url=f"http://127.0.0.1:{srv.server_address[1]}", tts_order=("mini",)))
     with pytest.raises(TTSError):
         t.synth_many(["a", "b", "c"])
     srv.shutdown()
@@ -275,3 +275,12 @@ def test_claude_request_params(fake_gw: WorkerConfig, tmp_path: Path) -> None:
     assert "temperature" not in s and s["thinking"] == {"type": "between_tools"}
     assert "temperature" not in h and "thinking" not in h
     assert d["temperature"] == 0.7 and "thinking" not in d
+
+
+def test_tts_falls_back_to_system_voice_when_services_down(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """mini TTS 连不上时降级到 macOS say——并且结果里记着 provider=say，调用方据此在摘要里标注降级。"""
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    t = TTS(WorkerConfig(root=tmp_path, tts_mini_url="http://127.0.0.1:9"))
+    r = t.synth_many(["你好世界"], voice="vivian", lang="Chinese")
+    assert r[0][2] == "say" and r[0][1] > 0.3
+    assert t.stats["provider"] == {"say": 1}
