@@ -51,8 +51,10 @@ def frame_times(duration: float, n_max: int = 40, every: float = 0.0) -> list[fl
 
 def grab_frame(src_path: Path, t: float, dst: Path, width: int = 640) -> Path:
     cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{t:.3f}", "-i", str(src_path), "-frames:v", "1",
-           "-vf", f"scale={width}:-2", "-q:v", "5", str(dst)]
-    subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+           "-vf", f"scale={width}:-2:out_range=pc,format=yuvj420p", "-q:v", "5", str(dst)]  # 有些素材是 yuv444 / 受限范围，mjpeg 要 yuvj
+    r = subprocess.run(cmd, capture_output=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError(f"抽帧失败 t={t:.2f}s {src_path.name}：{r.stderr.decode('utf-8', 'replace')[-300:]}")
     return dst
 
 

@@ -436,3 +436,39 @@ def test_concurrent_run_saves_do_not_collide(app: App) -> None:
     [t.start() for t in ts]
     [t.join() for t in ts]
     assert not errs and app.store.get_run(job, run["id"])["status"] == "queued"
+
+
+def test_reject_specific_outputs_keeps_others_and_records_zones(app: App) -> None:
+    job = app.store.create_job("t", {})["id"]
+    d = app.store.job_dir(job)
+    (d / "out").mkdir(exist_ok=True)
+    for n in ("a", "b"):
+        (d / "out" / f"{n}.mp4").write_bytes(b"x")
+    delivery.mark_awaiting(app.store, job, [{"id": "c1", "final": "out/a.mp4", "range": [10.0, 50.0]}, {"id": "c2", "final": "out/b.mp4", "range": [100.0, 140.0]}], "s")
+    with pytest.raises(PolicyError) as e:
+        delivery.reject(app.store, job, "boring", "", ["nope"])
+    assert e.value.code == "no_such_output"
+    delivery.reject(app.store, job, "boring", "没意思", ["c2"])
+    ctx = delivery.rejection_context(app.store, job)
+    assert ctx["zones"] == [(100.0, 140.0)] and ctx["rounds"] == 1 and ctx["feedback"][0]["text"] == "没意思"
+    assert [x["id"] for x in delivery.live(delivery.state(app.store, job))] == ["c1"]
+    # 补做：新一轮只加新的，c1 带过去
+    (d / "out" / "c.mp4").write_bytes(b"x")
+    delivery.mark_awaiting(app.store, job, [{"id": "r2_1", "final": "out/c.mp4", "range": [200.0, 240.0]}], "s2", carry=True)
+    st = delivery.state(app.store, job)
+    assert [x["id"] for x in st["deliverables"]] == ["c1", "r2_1"] and st["status"] == "awaiting_confirmation"
+    delivery.confirm(app.store, job, "可以")
+    delivery.handoff(app.store, job, "local", "", "", app.cfg.root)
+    assert sorted(p.name for p in (app.cfg.root / "handoff" / job).glob("*.mp4")) == ["a.mp4", "c.mp4"]  # 被拒的 b 不交付
+
+
+def test_pass_rate_triggers_degraded_mode_below_half(app: App) -> None:
+    root = app.cfg.root
+    assert delivery.pass_rate(root)["degraded_mode"] is False
+    for ev in ["confirmed", "rejected", "rejected", "rejected"]:
+        delivery._metric(root, "j", ev, n=1)
+    pr = delivery.pass_rate(root)
+    assert pr["n"] == 4 and pr["rate"] == 0.25 and pr["degraded_mode"] is True
+    for _ in range(6):
+        delivery._metric(root, "j", "confirmed", n=1)
+    assert delivery.pass_rate(root)["degraded_mode"] is False  # 最近 10 条 7/10

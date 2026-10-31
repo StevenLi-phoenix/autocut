@@ -34,10 +34,19 @@ def _save(store: Store, job_id: str, st: dict[str, Any], event: str, **info: Any
     return st
 
 
-def mark_awaiting(store: Store, job_id: str, deliverables: list[dict[str, Any]], summary: str) -> dict[str, Any]:
+def live(st: dict[str, Any]) -> list[dict[str, Any]]:
+    """没被拒绝的成片。"""
+    return [d for d in st.get("deliverables", []) if d.get("status") != "rejected"]
+
+
+def mark_awaiting(store: Store, job_id: str, deliverables: list[dict[str, Any]], summary: str, *, carry: bool = False) -> dict[str, Any]:
+    """停在等用户确认。carry=True：保留上一轮没被拒绝的成片（被拒后只补做被拒的那几条）。"""
     st = state(store, job_id)
-    st.update(status="awaiting_confirmation", deliverables=deliverables, summary=summary)
-    return _save(store, job_id, st, "awaiting_confirmation", n=len(deliverables))
+    kept = live(st) if carry else []
+    for d in kept:
+        d["status"] = "carried"
+    st.update(status="awaiting_confirmation", deliverables=[*kept, *deliverables], summary=summary)
+    return _save(store, job_id, st, "awaiting_confirmation", n=len(st["deliverables"]), carried=len(kept))
 
 
 def confirm(store: Store, job_id: str, quote: str) -> dict[str, Any]:
@@ -47,6 +56,7 @@ def confirm(store: Store, job_id: str, quote: str) -> dict[str, Any]:
     if len((quote or "").strip()) < 2:
         raise PolicyError("quote_required", "confirm 必须带用户确认的原话", "--quote '用户的原话'；不要替用户确认")
     st["status"] = "confirmed"
+    _metric(store.root, job_id, "confirmed", n=len(live(st)))
     return _save(store, job_id, st, "confirmed", quote=quote.strip()[:500])
 
 
@@ -58,10 +68,52 @@ def reject(store: Store, job_id: str, reason: str, text: str, outputs: list[str]
         raise PolicyError("bad_reason", f"原因码不认识：{reason}", f"可选：{'、'.join(sorted(REASONS))}")
     d = store.job_dir(job_id)
     rej = read_json(d / "rejections.json", {"items": []})
-    rej["items"].append({"t": time.time(), "reason": reason, "text": text[:500], "outputs": outputs})
+    targets = [x for x in st.get("deliverables", []) if x.get("status") != "rejected" and (not outputs or x["id"] in outputs)]
+    if outputs and not targets:
+        have = "、".join(x["id"] for x in live(st)) or "（无）"
+        raise PolicyError("no_such_output", f"没有这些成片：{outputs}", f"当前可拒绝的成片：{have}")
+    zones = [x["range"] for x in targets if x.get("range")]
+    rej["items"].append({"t": time.time(), "reason": reason, "text": text[:500], "outputs": [x["id"] for x in targets], "zones": zones})
     atomic_write_json(d / "rejections.json", rej)
+    for x in targets:
+        x["status"] = "rejected"
     st["status"] = "rejected"
-    return _save(store, job_id, st, "rejected", reason=reason, outputs=outputs)
+    _metric(store.root, job_id, "rejected", n=len(targets), reason=reason)
+    return _save(store, job_id, st, "rejected", reason=reason, outputs=[x["id"] for x in targets])
+
+
+def rejection_context(store: Store, job_id: str) -> dict[str, Any]:
+    """重新选段要带上的反馈：被拒过的区间（不得再选）+ 原因码与用户原话 + 已拒绝轮数。"""
+    rej = read_json(store.job_dir(job_id) / "rejections.json", {"items": []})
+    return {"zones": [tuple(z) for it in rej["items"] for z in it.get("zones", [])],
+            "feedback": [{"reason": it["reason"], "text": it.get("text", "")} for it in rej["items"]], "rounds": len(rej["items"])}
+
+
+def _metric(root: Path, job_id: str, event: str, **info: Any) -> None:
+    """成片通过/被拒的流水账，止损用（最近 10 条通过率 <50% → 切多备选模式）。"""
+    try:
+        d = root / "_worker"
+        d.mkdir(parents=True, exist_ok=True)
+        with (d / "metrics.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"t": time.time(), "job": job_id, "event": event, **info}, ensure_ascii=False) + "\n")
+    except OSError as e:
+        log.warning("写 metrics 失败：%s", e)
+
+
+def pass_rate(root: Path, last: int = 10) -> dict[str, Any]:
+    """最近 last 条已裁决成片的通过率；不足 3 条时不下结论。"""
+    p = root / "_worker" / "metrics.jsonl"
+    rows = []
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            r = json.loads(line)
+            rows += [r["event"]] * int(r.get("n", 1))
+    except (OSError, ValueError):
+        pass
+    rows = rows[-last:]
+    ok = sum(1 for x in rows if x == "confirmed")
+    rate = ok / len(rows) if rows else None
+    return {"n": len(rows), "confirmed": ok, "rate": rate, "degraded_mode": bool(rows) and len(rows) >= 3 and rate is not None and rate < 0.5}
 
 
 def make_preview(src: Path, dst: Path, *, ffmpeg: str = "ffmpeg", max_bytes: int = PREVIEW_MAX_BYTES) -> dict[str, Any]:
@@ -95,7 +147,7 @@ def handoff(store: Store, job_id: str, to: str, title: str, desc: str, root: Pat
     dest = root / "handoff" / job_id
     dest.mkdir(parents=True, exist_ok=True)
     files = []
-    for dv in st.get("deliverables", []):
+    for dv in live(st):
         src = policy.inside(d, dv["final"])
         shutil.copy2(src, dest / src.name)
         files.append(str(dest / src.name))

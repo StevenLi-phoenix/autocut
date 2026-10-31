@@ -67,6 +67,8 @@ class App:
         if parts == ["health"] or parts == ["v1", "health"]:
             return 200, {"ok": True, "uptime_s": round(time.time() - self.started), "root": str(self.cfg.root), "encoder": self.cfg.encoder,
                          "root_ok": self.cfg.root.is_dir(), "commands": sorted(policy.COMMANDS)}
+        if parts == ["v1", "metrics"]:
+            return 200, {"ok": True, "pass_rate": delivery.pass_rate(self.cfg.root)}
         if parts[:2] != ["v1", "jobs"]:
             raise PolicyError("not_found", f"没有这个路径：{path}", "GET /v1/health 看服务是否正常；路由见 docs/dev/worker.md")
         rest = parts[2:]
