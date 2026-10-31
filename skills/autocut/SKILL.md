@@ -18,6 +18,7 @@ description: 本地自动剪辑视频：去停顿/重说/口头禅、游戏实�
    | 鬼畜 | `autocut ytpmv 台词.mp4 --music bgm.mp3` | 自动转写，按字切成音节，对到拍上；编排建议导出到剪辑软件里做 |
    | 文稿做知识视频 | `autocut narrate 文稿.md 图1.png …` | 配音（macOS 语音）、字幕；图片按顺序分配，文稿里写 `![](图.png)` 可以指定 |
    | 只要文字稿或字幕 | `autocut transcribe 素材.mp4 --format srt` | |
+   | 长视频里由你自己挑几段做竖屏短片 | `autocut transcript 素材.mp4`（读带句段 id 的文字稿，分页）→ `autocut clip 素材.mp4 --from s0212 --to s0219 --title … --reason …` | 用句段 id 指认起止，**不要自己写时间戳**；程序吸附边界并校验（时长、不切断话、开头有话、不是半句、不重叠），不过会拒绝并写修法。选段要独立评审，不要自己给自己打分 |
    已有同名方案时，不加 `--force` 不会覆盖（保护人改过的地方）。
 2. **核对**：`autocut show 方案.json --filter uncertain`。把握度低于 0.75 的算拿不准。把这几处（时间 + 理由）告诉用户。
    - 如果用户要自己逐条看，**把命令 `autocut review 方案.json` 交给用户自己运行**。它会打开浏览器并一直运行。你要替用户打开就加 `--detach`，它会返回网址和 pid。

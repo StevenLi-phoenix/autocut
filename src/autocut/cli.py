@@ -107,6 +107,37 @@ HELP: dict[str, str] = {
     "transcribe.out": "写到哪里；默认素材旁边的 <素材名>.words.json / .srt / .txt",
     "transcribe.force": "覆盖已有文件",
     "transcribe.dry_run": "照常识别、打印摘要，但不写文件",
+    # ---- transcript / clip（agent 自己选段：先读带句段 ID 的文字稿，再按 ID 指认起止）
+    "transcript.short": "分页读带句段 ID 的文字稿（给 agent 选段用，不写文件）",
+    "transcript": (
+        "读素材的文字稿，一页一批，每句带句段 id（s0001…）和起始时间。给 agent 选段用：先用它读（`--around 1:05:00` 以某个时刻为中心取一页），"
+        "再用 `autocut clip` 按句段 id 指认候选的起止。**时间由程序换算，不要自己写时间戳**。需要先有文字稿（第一次会识别，结果有缓存，之后很快）。\n"
+        "例子：`autocut transcript talk.mp4 --limit 40` → 第 1–40 句（共 612 句），next_offset=40。"
+    ),
+    "transcript.media": "素材：视频或音频",
+    "transcript.offset": "从第几句开始（默认 0）",
+    "transcript.limit": "一页多少句（默认 40，最多 100）",
+    "transcript.around": "以这个时刻为中心取一页（秒或 m:ss），忽略 --offset",
+    "clip.short": "按句段 id 新建一条候选短片（程序吸附边界并做硬约束校验）",
+    "clip": (
+        "agent 自己选段：按 `autocut transcript` 给出的句段 id 指认起止（--from 起句、--to 止句，含两端），新建一条候选，写进方案。"
+        "边界由程序吸附到句子边缘之外的停顿里，**任何一刀都不落在一句话中间**；硬约束不过就拒绝，方案不变，并告诉你为什么、怎么改："
+        "时长不在 --length 内 · 起止切在话中间 · 开头 1 秒内没有人说话 · 结尾是半句 · 与已有候选重叠 · 落在 --forbid 区间或命中敏感词。\n"
+        "第一个参数是素材（新建方案，默认 <素材名>.autocut.json）或已有的 clips 方案（继续添加）。候选默认不选中，`--select` 直接选中，之后用 `autocut set 方案 clip_1 --select`。"
+        "出片用 `autocut render`；选段的好坏要独立评审，不要自己给自己打分。\n"
+        "例子：`autocut clip talk.mp4 --from s0212 --to s0219 --title 为什么猫爱睡觉 --reason 问题直接抛出，自成一体` → clip_1，3:12–3:58（46s）。"
+    ),
+    "clip.target": "素材（新建方案）或已有的 clips 方案（.json）",
+    "clip.from": "起句的句段 id，例如 s0212",
+    "clip.to": "止句的句段 id（含），例如 s0219",
+    "clip.title": "候选标题（≤60 字）",
+    "clip.reason": "为什么选它（写进方案，给人看）",
+    "clip.confidence": "把握度 0–1（默认 0.7）；低于 0.75 在方案里算拿不准",
+    "clip.length": "时长范围 最短-最长 秒（默认 30-60）",
+    "clip.forbid": "不可用区间（广告/赞助/被拒过的段）：开始-结束，可以重复",
+    "clip.aspect": "成片画幅，默认 9:16；none 跟随素材",
+    "clip.select": "直接选中这条候选",
+    "clip.expect_revision": "方案的 revision 不是 N 就拒绝（防止覆盖别人的改动）",
     # ---- analyze
     "analyze.short": "不知道用哪个配方时，先看一眼素材：时长、音轨、语音占比、BPM → 建议",
     "analyze": (
@@ -779,6 +810,28 @@ def build_parser() -> _Parser:
     sp.add_argument("-o", "--out", metavar="PATH", help=_help("transcribe.out"))
     sp.add_argument("--force", action="store_true", help=_help("transcribe.force"))
     sp.add_argument("--dry-run", action="store_true", help=_help("transcribe.dry_run"))
+
+    sp = add("transcript")
+    sp.add_argument("media", metavar="MEDIA", help=_help("transcript.media"))
+    sp.add_argument("--offset", type=int, default=0, metavar="N", help=_help("transcript.offset"))
+    sp.add_argument("--limit", type=int, default=40, metavar="N", help=_help("transcript.limit"))
+    sp.add_argument("--around", type=parse_time, metavar="T", help=_help("transcript.around"))
+    sp.add_argument("--lang", metavar="LANG", help=_help("opt.lang"))
+
+    sp = add("clip")
+    sp.add_argument("target", metavar="MEDIA|PLAN", help=_help("clip.target"))
+    sp.add_argument("--from", dest="first", required=True, metavar="ID", help=_help("clip.from"))
+    sp.add_argument("--to", dest="last", required=True, metavar="ID", help=_help("clip.to"))
+    sp.add_argument("--title", required=True, help=_help("clip.title"))
+    sp.add_argument("--reason", required=True, help=_help("clip.reason"))
+    sp.add_argument("--confidence", type=float, default=0.7, metavar="0-1", help=_help("clip.confidence"))
+    sp.add_argument("--length", type=parse_range, default=(30.0, 60.0), metavar="最短-最长", help=_help("clip.length"))
+    sp.add_argument("--forbid", type=parse_range, action="append", default=[], metavar="START-END", help=_help("clip.forbid"))
+    sp.add_argument("--aspect", default="9:16", metavar="W:H|none", help=_help("clip.aspect"))
+    sp.add_argument("--select", action="store_true", help=_help("clip.select"))
+    sp.add_argument("--lang", metavar="LANG", help=_help("opt.lang"))
+    sp.add_argument("--expect-revision", type=int, metavar="N", help=_help("clip.expect_revision"))
+    plan_writer(sp)
 
     sp = add("analyze")
     sp.add_argument("media", metavar="MEDIA", help=_help("analyze.media"))
@@ -1465,6 +1518,85 @@ def cmd_transcribe(args: argparse.Namespace, ui: Ui) -> dict[str, Any]:
     nxt = [_nx(_rerun_without(ui.argv, "--dry-run"), "真正写出文字稿")] if args.dry_run else [
         _nx(f"autocut cut {P}", "按文字稿剪停顿、重说和口头禅（结果有缓存，不会再识别一遍）")]
     return {**payload, "notes": [], "next": nxt}
+
+
+def cmd_transcript(args: argparse.Namespace, ui: Ui) -> dict[str, Any]:
+    _need_ffmpeg()
+    path = Path(args.media)
+    _need_files([path])
+    from autocut import clips, transcribe
+    from autocut.analysis import Media
+
+    if not transcribe.available():
+        raise _no_asr_error()
+    if not 1 <= args.limit <= 100:
+        raise CliError("usage", f"--limit {args.limit} 不在 1–100 内", "一页最多 100 句，用 --offset 翻页", EXIT_USAGE)
+    m = Media(path)
+    log.info("transcript：%s offset=%s limit=%s around=%s", path.name, args.offset, args.limit, args.around)
+    with _cancellable("transcript"), ui.activity.spin(f"transcript · 读 {path.name}"):
+        ctx = clips.make_context(m, _lang(args.lang))
+    pg = clips.page(ctx.sents, offset=args.offset, limit=args.limit, around=args.around)
+    P = _q(_rel(path))
+    nxt = []
+    if pg["next_offset"] is not None:
+        nxt.append(_nx(f"autocut transcript {P} --offset {pg['next_offset']} --limit {args.limit}", "下一页"))
+    if pg["items"]:
+        a, b = pg["items"][0]["id"], pg["items"][-1]["id"]
+        nxt.append(_nx(f"autocut clip {P} --from {a} --to {b} --title … --reason …", "按句段 id 选一段做候选（时间由程序换算）"))
+    notes = [] if pg["total"] else ["没有识别到说话"]
+    return {"path": _rel(path), "duration": _r(m.duration), "language": _lang(args.lang) or "auto", **pg, "next": nxt, "notes": notes,
+            **({"notice": "没有识别到说话：素材可能没有人声"} if not pg["total"] else {})}
+
+
+def cmd_clip(args: argparse.Namespace, ui: Ui) -> dict[str, Any]:
+    _need_ffmpeg()
+    from autocut import clips
+    from autocut.analysis import Media
+    from autocut.recipes._common import plan_path_for
+
+    target = Path(args.target)
+    if not (0.0 <= args.confidence <= 1.0):
+        raise CliError("usage", f"--confidence {args.confidence} 不在 0–1 内", "例如 --confidence 0.8", EXIT_USAGE)
+    aspect = None if args.aspect.lower() == "none" else args.aspect
+    if target.suffix == ".json":
+        plan = _load_plan(target)
+        if plan.recipe != "clips":
+            raise CliError("not_clips_plan", f"{target.name} 是 {plan.recipe} 方案，不是 clips 方案", "clip 只往 clips 方案里加候选；新建请直接给素材：autocut clip 素材.mp4 --from …", EXIT_INPUT)
+        media_path = plan.source_path(next(iter(plan.sources)))
+    else:
+        _need_files([target])
+        media_path = target
+        out = Path(args.out) if args.out else plan_path_for(target, None)
+        if out.exists() and not args.force:
+            plan = _load_plan(out)  # 已有方案：继续往里加
+            if plan.recipe != "clips":
+                raise CliError("plan_exists", f"{_rel(out)} 已存在且是 {plan.recipe} 方案", "-o 写到别的路径，或 --force 覆盖（会丢掉旧方案）", EXIT_INPUT)
+        else:
+            plan = clips.new_plan(Media(target), out, aspect=aspect, language=_lang(args.lang))
+    P = _q(_rel(plan.path))
+    if args.expect_revision is not None and plan.revision != args.expect_revision:
+        raise CliError("revision_conflict", f"方案已经被别人改过（现在是 rev {plan.revision}，你期望 rev {args.expect_revision}）", f"先 autocut show {P} 重新读", EXIT_INPUT)
+    media = Media(media_path)
+    ctx = clips.make_context(media, _lang(args.lang))
+    log.info("clip：%s %s–%s length=%s forbid=%s", media_path.name, args.first, args.last, args.length, args.forbid)
+    try:
+        output, warns = clips.add_clip(plan, ctx, args.first, args.last, title=args.title, reason=args.reason, confidence=args.confidence, length=args.length,
+                                       forbidden=list(args.forbid), banned_words=[], aspect=aspect, selected=args.select)
+    except clips.ClipError as e:
+        first = e.violations[0]
+        raise CliError(first["code"], f"这条候选没过硬约束：{e}", "；".join(f"{v['code']}：{v['fix']}" for v in e.violations), EXIT_INPUT) from None
+    seg = output.segments[0]
+    if not args.dry_run:
+        plan.validate()
+        plan.save()
+    payload = {"plan": _rel(plan.path), "revision": plan.revision, "output": output.id, "selected": output.selected, "title": output.title,
+               "start": _r(seg.start), "end": _r(seg.end), "at": _mmss(seg.start), "duration": _r(output.duration, 1), "from": args.first, "to": args.last,
+               "warnings": warns, "total_candidates": len(plan.outputs)}
+    if args.dry_run:
+        payload["dry_run"] = True
+    nxt = [_nx(f"autocut set {P} {output.id} --select", "选中它（出片只出被选中的）")] if not output.selected else []
+    nxt.append(_nx(f"autocut render {P} --output {output.id}", "出片（出片后自动核验）"))
+    return {**payload, "next": nxt, "notes": [w["message"] for w in warns]}
 
 
 def cmd_analyze(args: argparse.Namespace, ui: Ui) -> dict[str, Any]:
@@ -2471,7 +2603,7 @@ def cmd_check(args: argparse.Namespace, ui: Ui) -> dict[str, Any]:
 
 
 COMMANDS: dict[str, Callable[[argparse.Namespace, Ui], dict[str, Any]]] = {
-    "doctor": cmd_doctor, "transcribe": cmd_transcribe, "analyze": cmd_analyze, "cut": cmd_cut, "highlights": cmd_highlights, "montage": cmd_montage,
+    "doctor": cmd_doctor, "transcribe": cmd_transcribe, "transcript": cmd_transcript, "clip": cmd_clip, "analyze": cmd_analyze, "cut": cmd_cut, "highlights": cmd_highlights, "montage": cmd_montage,
     "ytpmv": cmd_ytpmv, "narrate": cmd_narrate, "show": cmd_show, "set": cmd_set, "review": cmd_review,
     "render": cmd_render, "export": cmd_export, "check": cmd_check,
 }
@@ -2621,6 +2753,17 @@ def h_transcribe(res: dict[str, Any], st: Style) -> list[str]:
     if res["preview_total"] > 8:
         lines.append(f"{_IND}{st('dim', f'……共 {res["preview_total"]} 句')}")
     return lines + _tail(st, res)
+
+
+def h_transcript(res: dict[str, Any], st: Style) -> list[str]:
+    lines = [_label(st, "ok", "✓", "文字稿") + f"{res['path']} · 第 {res['offset'] + 1}–{res['offset'] + res['showing']} 句 / 共 {res['total']} 句 · {_mmss(res['duration'])}"]
+    lines += [f"{_IND}{st('dim', it['id'])} {st('dim', it['at'])}  {it['text']}" for it in res["items"]]
+    return lines + _tail(st, res)
+
+
+def h_clip(res: dict[str, Any], st: Style) -> list[str]:
+    head = _label(st, "ok", "✓", "候选") + f"{res['output']} · {res['title']} · {res['at']} 起 {res['duration']}s（{res['from']}–{res['to']}）"
+    return [head, f"{_IND}方案 {res['plan']}（rev {res['revision']}，共 {res['total_candidates']} 条候选）" + ("，已选中" if res["selected"] else "，未选中")] + _tail(st, res)
 
 
 def h_analyze(res: dict[str, Any], st: Style) -> list[str]:
@@ -2796,7 +2939,7 @@ def h_check(res: dict[str, Any], st: Style) -> list[str]:
 
 
 HUMAN: dict[str, Callable[[dict[str, Any], Style], list[str]]] = {
-    "doctor": h_doctor, "transcribe": h_transcribe, "analyze": h_analyze, "cut": h_recipe, "highlights": h_recipe, "montage": h_recipe, "ytpmv": h_recipe,
+    "doctor": h_doctor, "transcribe": h_transcribe, "transcript": h_transcript, "clip": h_clip, "analyze": h_analyze, "cut": h_recipe, "highlights": h_recipe, "montage": h_recipe, "ytpmv": h_recipe,
     "narrate": h_recipe, "show": h_show, "set": h_set, "review": h_review, "render": h_render, "export": h_export, "check": h_check,
 }
 

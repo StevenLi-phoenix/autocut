@@ -28,6 +28,8 @@
 |---|---|---|
 | `doctor` | 本机能力自检：ffmpeg、whisper-cli、模型、`say` 的声音；缺什么、怎么补 | 否 |
 | `transcribe` | 逐词文字稿（谁在什么时候说了什么）：json / srt / txt，本机离线识别 | 写文字稿文件 |
+| `transcript` | 分页读带句段 ID（s0001…）的文字稿，给 agent 选段用（只读） | 否 |
+| `clip` | 按句段 ID 指认起止新建一条候选短片：边界由程序吸附，硬约束不过就拒绝并说明修法 | 写方案 |
 | `analyze` | 看一眼素材：时长、画面、音轨（猜哪条是人声）、语音占比、BPM | 只写分析缓存 |
 | `cut` | 口播、录课、游戏实况：去停顿、去重说、去口头禅 → 方案 | 写方案 |
 | `highlights` | 直播录像 → 候选高光（带理由、诱饵识别），默认选前 3 条 → 方案 | 写方案 |
@@ -238,6 +240,27 @@
 **Errors**：没有模型或 whisper-cli → 4，`fix` 写明模型应该放在哪里、预估下载量；**不会自动下载**
 **Annotations**：只读素材，写文字稿文件，结果有缓存 · 第一次慢（CPU 识别），之后复用缓存
 
+## Spec card — `autocut transcript` / `autocut clip`（agent 自主选段，v1.2）
+
+**Description**（`transcript`）
+> 读素材的文字稿，一页一批，每句带句段 id（s0001…）和起始时间。给 agent 选段用：先用它读（`--around 1:05:00` 以某个时刻为中心取一页），再用 `autocut clip` 按句段 id 指认候选的起止。**时间由程序换算，不要自己写时间戳**。
+> 例子：`autocut transcript talk.mp4 --limit 40` → 第 1–40 句（共 612 句），next_offset=40。
+
+**Inputs**：`MEDIA` · `--offset N` · `--limit N`（1–100，默认 40）· `--around T` · `--lang`
+**Output**：`{"ok": true, "command": "transcript", "total": 612, "offset": 0, "showing": 40, "next_offset": 40, "items": [{"id": "s0001", "start": 0.12, "end": 3.4, "at": "00:00", "text": "…"}], "next": [...]}`。单句文字最多 160 字（超出加 …）。句段 id 在同一份文字稿里跨页稳定。
+**Errors**：没有识别模型 → 4（`fix` 同 transcribe）；`--limit` 越界 → 2
+**Annotations**：只读 · 第一次识别慢，之后走缓存
+
+**Description**（`clip`）
+> agent 自己选段：按句段 id 指认起止（`--from` 起句、`--to` 止句，含两端），新建一条候选写进方案。边界由程序吸附到句子边缘之外的停顿里，任何一刀都不落在一句话中间；硬约束不过就拒绝，方案不变，并告诉你为什么、怎么改。
+> 例子：`autocut clip talk.mp4 --from s0212 --to s0219 --title 为什么猫爱睡觉 --reason 问题直接抛出，自成一体` → clip_1，3:12–3:58（46s）。
+
+**Inputs**：`MEDIA|PLAN`（素材 = 新建 clips 方案；.json = 继续往 clips 方案里加）· `--from ID` · `--to ID` · `--title` · `--reason` · `--confidence 0–1`（默认 0.7）· `--length 最短-最长`（默认 30-60）· `--forbid START-END`（可重复）· `--aspect W:H|none`（默认 9:16）· `--select` · `--expect-revision N` · `-o` · `--dry-run` · `--force`
+**硬约束**（任何一条不过都拒绝，退出码 3，`error.code` 就是违例码，`error.fix` 逐条写修法）：`too_short` / `too_long`（时长）· `cut_mid_speech`（起止切在话中间）· `late_opening`（开头 >1s 才有人说话）· `truncated_ending`（结尾是半句）· `overlaps_other`（与已有候选重叠 >30%）· `in_forbidden_zone`（落在 `--forbid` 区间）· `unknown_sentence` / `reversed`（id 不存在或起止颠倒）。`too_close`（离已有候选 <2s）只提醒，写进 `warnings`。
+**Output**：`{"ok": true, "command": "clip", "plan": "talk.autocut.json", "revision": 2, "output": "clip_1", "selected": false, "start": 192.4, "end": 238.7, "at": "03:12", "duration": 46.3, "total_candidates": 1, "warnings": [], "next": [...]}`
+**Errors**：不是 clips 方案 → 3（`not_clips_plan`）· revision 不符 → 3（`revision_conflict`）
+**Annotations**：写方案（原子写入、revision +1）；候选默认不选中，选中用 `autocut set 方案 clip_1 --select`；**选段好坏要独立评审，不要自己给自己打分**
+
 ## 修订记录（v0 → v1，依据 Define 的根因簇）
 
 | 根因簇（affinity.md） | 证据 | 改动 |
@@ -253,6 +276,9 @@
 
 ### v1 → v1.1（纸面原型，见 `paper-prototype.md` P1–P12）
 `tell_user` 替换 `say`；`review` 非 TTY 时必须 `--detach`；配方遇到已有方案时不加 `--force` 就失败（`plan_exists`）；`show --around` 支持 m:ss，默认按成片时间；help 写明 pace 各档秒数、格式和软件的对应、uncertain 阈值 0.75、render 的核验项；取消时删掉写了一半的文件。
+
+### v1.1 → v1.2（接入 DSH：agent 自主选段，见调研报告 P0-1）
+新增 `transcript`（分页、句段 ID）与 `clip`（按 ID 新建候选 + 硬约束）；理由：去掉选段的人工确认后，选段由 agent 自己定，模型写时间戳会混淆 00:01:55 与 01:55:00 或造出不在句子边缘的时间，改成"指认句段 ID，程序换算并校验"。纸面原型与带 autocut 的 eval 尚未重跑（待验证）。
 
 ## 待验证（纸面原型和 eval 要回答的）
 1. P2（haiku）只看 `--help` 和 skill 描述，能不能选对配方、在交给人之前用 `show --filter uncertain` 自查，而不是直接读整个方案 JSON？
