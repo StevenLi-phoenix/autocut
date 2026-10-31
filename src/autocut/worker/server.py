@@ -279,7 +279,7 @@ class Handler(BaseHTTPRequestHandler):
         d = self.app.store.job_dir(job_id)
         self.app.store.get_job(job_id)
         p = policy.inside(d, rel)
-        if not p.is_file() or any(part.startswith(".") for part in p.relative_to(d.resolve()).parts):
+        if not p.is_file() or any(part.startswith(".") for part in Path(rel).parts):
             raise PolicyError("no_such_file", f"没有这个文件：{rel}", "GET /v1/jobs/<job>/files 列出文件")
         size = p.stat().st_size
         start, end = 0, size - 1

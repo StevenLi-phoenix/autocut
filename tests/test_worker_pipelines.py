@@ -428,6 +428,20 @@ def test_frame_endpoint_and_inbox_link(app: App, media: Path) -> None:
         link = app.store.job_dir(job) / "src" / "big.mp4"
         assert link.is_symlink() and e["kind"] == "inbox_link" and e["duration_s"] > 30
         assert policy.inside(app.store.job_dir(job), "src/big.mp4") == (inbox / "big.mp4").resolve()  # 链接指向 inbox：允许只读使用
+        (inbox / "notes.md").write_text("# 报告\n正文", encoding="utf-8")
+        ingest.link_inbox(app.cfg, app.store, job, "notes.md")
+        import threading  # noqa: PLC0415
+        import urllib.request  # noqa: PLC0415
+
+        from autocut.worker.server import make_server  # noqa: PLC0415
+
+        srv = make_server(app.cfg, app)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:  # 链接文件也能 fetch（agent 读 inbox 里的报告）
+            with urllib.request.urlopen(f"http://127.0.0.1:{srv.server_address[1]}/v1/jobs/{job}/file?path=src/notes.md", timeout=20) as r:
+                assert "正文" in r.read().decode()
+        finally:
+            srv.shutdown()
         (app.store.job_dir(job) / "src" / "evil.mp4").symlink_to("/etc/hosts")
         with pytest.raises(policy.PolicyError):
             policy.inside(app.store.job_dir(job), "src/evil.mp4")  # 指向别处的链接照旧拒绝
