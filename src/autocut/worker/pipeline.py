@@ -105,11 +105,17 @@ def start(app: App, job_id: str, name: str, opts: dict[str, Any], fn: Callable[[
             run["status"] = "cancelled"
         except PipelineError as e:
             run.update(status="failed", result={"ok": False, "error": {"code": e.code, "message": e.message, "fix": e.fix, "stage": e.stage}})
-        except policy.PolicyError as e:
-            run.update(status="failed", result={"ok": False, "error": {"code": e.code, "message": e.message, "fix": e.fix}})
         except Exception as e:  # noqa: BLE001
-            log.error("pipeline 异常 %s/%s\n%s", job_id, run_id, traceback.format_exc())
-            run.update(status="failed", result={"ok": False, "error": {"code": "pipeline_crashed", "message": f"{type(e).__name__}: {e}", "fix": "看 worker 日志"}})
+            from autocut.worker.llm import LLMError  # noqa: PLC0415
+
+            stage = (run.get("stages") or [{}])[-1].get("name", "")
+            if isinstance(e, LLMError):
+                run.update(status="failed", result={"ok": False, "error": {"code": e.code, "message": e.message, "fix": e.fix, "stage": stage}})
+            elif isinstance(e, policy.PolicyError):
+                run.update(status="failed", result={"ok": False, "error": {"code": e.code, "message": e.message, "fix": e.fix}})
+            else:
+                log.error("pipeline 异常 %s/%s\n%s", job_id, run_id, traceback.format_exc())
+                run.update(status="failed", result={"ok": False, "error": {"code": "pipeline_crashed", "message": f"{type(e).__name__}: {e}", "fix": "看 worker 日志", "stage": stage}})
         finally:
             if run["stages"] and run["stages"][-1].get("t_end") is None:
                 run["stages"][-1]["t_end"] = round(time.perf_counter() - ctx.t0, 1)

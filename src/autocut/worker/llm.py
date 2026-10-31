@@ -77,7 +77,9 @@ class Gateway:
         if self.spent_cny() >= self.budget_cny:
             raise BudgetExceeded("budget_exceeded", f"本任务 LLM 花费已达上限 ¥{self.budget_cny:g}（已花 ¥{self.spent_cny():.3f}）",
                                  "告诉用户预算用完；如需继续，开新 job 或用 --budget-cny 调高上限（要用户同意）")
-        body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+        body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
+        if not model.startswith("claude"):  # Claude 5 系列网关会拒绝 temperature（400 deprecated）
+            body["temperature"] = temperature
         if json_mode:
             body["response_format"] = {"type": "json_object"}
         seq = len(list(self.dir.glob("*.json"))) + 1
