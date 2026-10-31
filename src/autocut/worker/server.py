@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from autocut.worker import ingest, policy
+from autocut.worker import delivery, ingest, policy
 from autocut.worker.config import WorkerConfig
 from autocut.worker.policy import PolicyError
 from autocut.worker.runner import Runner
@@ -39,7 +39,8 @@ class App:
         self.store = store or Store(cfg.root)
         self.runner = runner or Runner(cfg, self.store)
         self.runner.on_finish(self._after_run)
-        self.pipelines: dict[str, Any] = {}  # 阶段 3+ 注册
+        self.pipelines: dict[str, Any] = {}  # name -> fn(app, job_id, opts) -> run
+        self.pipeline_ctx: dict[tuple[str, str], Any] = {}
         self.started = time.time()
 
     # ---- 事件钩子：ingest 完成后登记来源
@@ -82,7 +83,7 @@ class App:
         sub = rest[1:]
         if not sub:
             return 200, {"ok": True, "job": job, "provenance": ingest.read_json(d / "provenance.json", {"sources": []}),
-                         "files": self._files(d), "runs": [self._run_brief(r) for r in self.store.list_runs(job_id)[-20:]]}
+                         "state": delivery.state(self.store, job_id).get("status"), "files": self._files(d), "runs": [self._run_brief(r) for r in self.store.list_runs(job_id)[-20:]]}
         if sub == ["ingest"] and method == "POST":
             return 200, {"ok": True, "run": self._ingest(job_id, body)}
         if sub == ["run"] and method == "POST":
@@ -91,6 +92,11 @@ class App:
         if sub and sub[0] == "runs" and len(sub) >= 2:
             run_id = sub[1]
             if len(sub) == 3 and sub[2] == "cancel" and method == "POST":
+                from autocut.worker import pipeline
+
+                if pipeline.cancel(self, job_id, run_id):
+                    self.runner.get(job_id, run_id, wait=15)
+                    return 200, {"ok": True, "run": self._run_brief(self.store.get_run(job_id, run_id))}
                 return 200, {"ok": True, "run": self._run_brief(self.runner.cancel(job_id, run_id))}
             if len(sub) == 2:
                 return 200, {"ok": True, "run": self.runner.get(job_id, run_id, float(q("wait", "0")))}
@@ -103,14 +109,18 @@ class App:
             if not fn:
                 raise PolicyError("no_such_pipeline", f"没有这个流水线：{sub[1]}", f"可用：{'、'.join(sorted(self.pipelines)) or '（暂无）'}")
             return 200, {"ok": True, "run": fn(self, job_id, body)}
-        if sub and sub[0] in self.extra_routes:
-            return self.extra_routes[sub[0]](self, method, job_id, sub[1:], query, body)
+        if sub == ["state"]:
+            return 200, {"ok": True, "state": delivery.state(self.store, job_id)}
+        if sub == ["confirm"] and method == "POST":
+            return 200, {"ok": True, "state": delivery.confirm(self.store, job_id, str(body.get("quote", "")))}
+        if sub == ["reject"] and method == "POST":
+            return 200, {"ok": True, "state": delivery.reject(self.store, job_id, str(body.get("reason", "")), str(body.get("text", "")), list(body.get("outputs") or []))}
+        if sub == ["handoff"] and method == "POST":
+            return 200, delivery.handoff(self.store, job_id, str(body.get("to", "local")), str(body.get("title", "")), str(body.get("desc", "")), self.cfg.root)
         raise PolicyError("not_found", f"没有这个路径：{path}", "路由见 docs/dev/worker.md")
 
-    extra_routes: dict[str, Any] = {}
-
     def _run_brief(self, r: dict[str, Any]) -> dict[str, Any]:
-        keys = ("id", "kind", "cmd", "args", "status", "pid", "heavy", "exit_code", "duration_s", "created_at", "started_at", "finished_at", "note", "registered", "error")
+        keys = ("id", "kind", "cmd", "args", "status", "pid", "heavy", "exit_code", "duration_s", "created_at", "started_at", "finished_at", "note", "registered", "error", "progress")
         return {k: r[k] for k in keys if k in r}
 
     def _files(self, d: Path, sub: str | None = "") -> list[dict[str, Any]]:

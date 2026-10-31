@@ -347,3 +347,73 @@ def test_http_upload_name_sanitized(http: Any) -> None:
     job = b["job"]["id"]
     code, b, _ = http("PUT", f"/v1/jobs/{job}/upload?name=../../x%20y.mp4", raw=b"abc", headers={"Content-Length": "3"})
     assert code == 200 and b["source"]["file"] == "src/x_y.mp4"
+
+
+# ------------------------------------------------------------------ delivery（确认门）
+
+from autocut.worker import delivery  # noqa: E402
+
+
+def _awaiting(app: App) -> str:
+    job = app.store.create_job("t", {"attribution": {"repost_label": True}})["id"]
+    d = app.store.job_dir(job)
+    (d / "out").mkdir(exist_ok=True)
+    (d / "out" / "a.main.mp4").write_bytes(b"fake")
+    ingest.register_source(app.store, job, {"kind": "url", "file": "src/a.mp4", "url": "https://youtu.be/x", "title": "T", "channel": "C"})
+    delivery.mark_awaiting(app.store, job, [{"id": "main", "final": "out/a.main.mp4", "preview": "out/p.mp4", "extras": []}], "摘要")
+    return job
+
+
+def test_handoff_blocked_until_confirmed(app: App) -> None:
+    job = _awaiting(app)
+    for target in ("local", "kaorou"):
+        with pytest.raises(PolicyError) as e:
+            delivery.handoff(app.store, job, target, "", "", app.cfg.root)
+        assert e.value.code == "not_confirmed"
+    assert not (app.cfg.root / "handoff").exists()
+
+
+def test_confirm_requires_quote_and_awaiting(app: App) -> None:
+    job = app.store.create_job("t", {})["id"]
+    with pytest.raises(PolicyError) as e:
+        delivery.confirm(app.store, job, "好的")
+    assert e.value.code == "not_awaiting"
+    job = _awaiting(app)
+    with pytest.raises(PolicyError) as e:
+        delivery.confirm(app.store, job, "  ")
+    assert e.value.code == "quote_required"
+    st = delivery.confirm(app.store, job, "可以，发布吧")
+    assert st["status"] == "confirmed" and st["history"][-1]["quote"] == "可以，发布吧"
+
+
+def test_confirmed_handoff_local_copies_files_and_credits(app: App) -> None:
+    job = _awaiting(app)
+    delivery.confirm(app.store, job, "确认")
+    r = delivery.handoff(app.store, job, "local", "标题", "简介", app.cfg.root)
+    dest = app.cfg.root / "handoff" / job
+    assert (dest / "a.main.mp4").read_bytes() == b"fake" and "转载自 C《T》" in (dest / "credits.txt").read_text()
+    assert json.loads((dest / "meta.json").read_text())["title"] == "标题" and r["files"]
+    assert delivery.state(app.store, job)["status"] == "handed_off"
+
+
+def test_reject_records_reason_and_blocks_handoff(app: App) -> None:
+    job = _awaiting(app)
+    with pytest.raises(PolicyError):
+        delivery.reject(app.store, job, "nonsense", "", [])
+    delivery.reject(app.store, job, "boring", "没意思", ["main"])
+    rej = json.loads((app.store.job_dir(job) / "rejections.json").read_text())
+    assert rej["items"][0]["reason"] == "boring"
+    with pytest.raises(PolicyError):
+        delivery.handoff(app.store, job, "local", "", "", app.cfg.root)
+
+
+def test_http_confirm_flow_blocks_agent_shortcut(http: Any, app: App) -> None:
+    job = _awaiting(app)
+    code, b, _ = http("POST", f"/v1/jobs/{job}/handoff", {"to": "local"})
+    assert code == 400 and b["error"]["code"] == "not_confirmed"
+    code, b, _ = http("POST", f"/v1/jobs/{job}/confirm", {})
+    assert code == 400 and b["error"]["code"] == "quote_required"
+    code, b, _ = http("POST", f"/v1/jobs/{job}/confirm", {"quote": "可以"})
+    assert code == 200
+    code, b, _ = http("POST", f"/v1/jobs/{job}/handoff", {"to": "local"})
+    assert code == 200 and b["ok"]

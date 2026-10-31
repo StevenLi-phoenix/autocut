@@ -17,7 +17,7 @@ class WorkerConfig:
     root: Path
     port: int = DEFAULT_PORT
     host: str = "127.0.0.1"
-    autocut_cmd: tuple[str, ...] = ()  # 默认 [当前 python, -m, autocut.cli]
+    autocut_cmd: tuple[str, ...] = (sys.executable, "-m", "autocut.cli")
     ffmpeg_dir: str | None = None  # 私有 ffmpeg 目录，放 PATH 最前
     encoder: str = "libx264"  # 与烤肉共用 VideoToolbox，worker 默认走软编并降低优先级
     heavy_slots: int = 1

@@ -92,6 +92,10 @@ class Runner:
             self._cv.notify_all()
         return self._fresh(job_id, run_id)
 
+    def notify(self) -> None:
+        with self._cv:
+            self._cv.notify_all()
+
     # ---- 内部
     def _fresh(self, job_id: str, run_id: str) -> dict[str, Any]:
         run = self.store.get_run(job_id, run_id)

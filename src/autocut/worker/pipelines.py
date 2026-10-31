@@ -9,4 +9,7 @@ if TYPE_CHECKING:
 
 
 def register(app: App) -> None:
-    """把各流水线挂到 app.pipelines；阶段 2 起填充。"""
+    """把各流水线挂到 app.pipelines。"""
+    from autocut.worker import pipe_cut
+
+    app.pipelines["cut"] = pipe_cut.pipeline_cut
