@@ -126,7 +126,7 @@ class _FakeTTS:
     def __init__(self, tmp: Path) -> None:
         self.tmp = tmp
 
-    def synth_many(self, lines, *, voice, lang):
+    def synth_many(self, lines, *, voice, lang, style="cute"):
         from test_worker_commentary import _tone_wav  # noqa: PLC0415
 
         res = []

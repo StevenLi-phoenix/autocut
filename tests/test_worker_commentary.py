@@ -220,7 +220,7 @@ def test_tts_caches_by_content_and_survives_restart(tmp_path: Path) -> None:
     FakeTTS.calls, FakeTTS.fail = 0, False
     srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeTTS)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    cfg = WorkerConfig(root=tmp_path, tts_mini_url=f"http://127.0.0.1:{srv.server_address[1]}")
+    cfg = WorkerConfig(root=tmp_path, tts_mini_url=f"http://127.0.0.1:{srv.server_address[1]}", tts_order=("mini",))
     t1 = TTS(cfg)
     r = t1.synth_many(["你好", "世界", "你好"])
     assert FakeTTS.calls == 2 and r[0][0] == r[2][0] and r[0][1] == pytest.approx(1.0, abs=0.01) and r[0][2] == "mini"
@@ -311,3 +311,58 @@ def test_chat_json_doubles_max_tokens_when_truncated(fake_gw: WorkerConfig, tmp_
     finally:
         FakeGateway.do_POST = orig  # type: ignore[method-assign]
     assert obj == {"a": [1, 2]} and FakeGateway.seen[-1]["max_tokens"] == 200
+
+
+class FakeFeiyu(BaseHTTPRequestHandler):
+    jobs: dict[str, int] = {}
+    seen: list[dict[str, Any]] = []
+    fail_first = False
+
+    def log_message(self, *a: Any) -> None:
+        pass
+
+    def _send(self, code: int, body: bytes, ctype: str = "application/json") -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:
+        n = int(self.headers["Content-Length"])
+        FakeFeiyu.seen.append({"auth": self.headers.get("Authorization"), **json.loads(self.rfile.read(n))})
+        jid = f"j{len(FakeFeiyu.jobs) + 1}"
+        FakeFeiyu.jobs[jid] = 0
+        self._send(200, json.dumps({"id": jid, "status": "queued"}).encode())
+
+    def do_GET(self) -> None:
+        parts = self.path.strip("/").split("/")
+        jid = parts[2]
+        if parts[-1] == "audio":
+            p = Path("/tmp") / f"fakefeiyu-{threading.get_ident()}.wav"
+            _tone_wav(p, 1.5)
+            return self._send(200, p.read_bytes(), "audio/wav")
+        FakeFeiyu.jobs[jid] += 1
+        self._send(200, json.dumps({"id": jid, "status": "running" if FakeFeiyu.jobs[jid] < 2 else "succeeded"}).encode())
+
+
+def test_tts_feiyu_submit_poll_download_and_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeFeiyu.jobs, FakeFeiyu.seen = {}, []
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeFeiyu)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    sec = tmp_path / "w.env"
+    sec.write_text("AUTOCUT_FEIYU_KEY=feiyu-secret\n")
+    cfg = WorkerConfig(root=tmp_path, secrets_file=str(sec), tts_feiyu_url=f"http://127.0.0.1:{srv.server_address[1]}", tts_order=("feiyu", "say"))
+    t = TTS(cfg)
+    r = t.synth_many(["你好", "世界"], style="gentle")
+    assert [x[2] for x in r] == ["feiyu", "feiyu"] and r[0][1] == pytest.approx(1.5, abs=0.02)
+    assert FakeFeiyu.seen[0] == {"auth": "Bearer feiyu-secret", "text": "你好", "voice": "feiyu", "style": "gentle"}
+    n = len(FakeFeiyu.seen)
+    TTS(cfg).synth_many(["你好", "世界"], style="gentle")  # 重启后命中缓存：不再请求 laptop（不再加载 7.8GB 的模型）
+    assert len(FakeFeiyu.seen) == n
+    TTS(cfg).synth_many(["你好"], style="cute")  # 风格不同 = 不同缓存键
+    assert len(FakeFeiyu.seen) == n + 1
+    srv.shutdown()
+    t2 = TTS(WorkerConfig(root=tmp_path / "x", secrets_file=str(sec), tts_feiyu_url="http://127.0.0.1:9", tts_order=("feiyu", "say")))
+    assert t2.synth_many(["再见"])[0][2] == "say"  # laptop 不通（WSL 重启）：回落，不是失败

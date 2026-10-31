@@ -67,7 +67,7 @@ class TTS:
         h = hashlib.sha256(f"{provider}|{voice}|{lang}|{text}".encode()).hexdigest()[:32]
         return self.cache / f"{provider}-{h}.wav"
 
-    def synth_many(self, lines: list[str], *, voice: str = "vivian", lang: str = "Chinese") -> list[tuple[Path, float, str]]:
+    def synth_many(self, lines: list[str], *, voice: str = "vivian", lang: str = "Chinese", style: str = "cute") -> list[tuple[Path, float, str]]:
         """逐句合成（缓存优先）。返回 [(wav 路径, 秒数, provider)]。某个后端整批失败就换下一个后端。"""
         results: list[tuple[Path, float, str] | None] = [None] * len(lines)
         for provider in self.providers():
@@ -75,21 +75,22 @@ class TTS:
             if not todo:
                 break
             # 先吃缓存
+            vkey = f"{self._voice(provider, voice)}/{style if provider == 'feiyu' else ''}"
             for i in list(todo):
-                p = self.key(provider, voice, lang, lines[i])
+                p = self.key(provider, vkey, lang, lines[i])
                 if p.exists() and p.stat().st_size > 1000:
                     results[i] = (p, wav_duration(p), provider)
                     self.stats["hit"] += 1
             todo = [i for i, r in enumerate(results) if r is None]
             failed = 0
             for i in todo:
-                p = self.key(provider, voice, lang, lines[i])
+                p = self.key(provider, vkey, lang, lines[i])
                 try:
                     if p.exists() and p.stat().st_size > 1000:  # 同一批里的重复句：前一句刚合成过
                         results[i] = (p, wav_duration(p), provider)
                         self.stats["hit"] += 1
                         continue
-                    self._one(provider, lines[i], voice, lang, p)
+                    self._one(provider, lines[i], voice, lang, p, style)
                     results[i] = (p, wav_duration(p), provider)
                     self.stats["miss"] += 1
                     self.stats["provider"][provider] = self.stats["provider"].get(provider, 0) + 1
@@ -103,7 +104,11 @@ class TTS:
             raise TTSError(f"{len(missing)} 句没能合成（后端：{self.providers()}）")
         return [r for r in results if r is not None]
 
-    def _one(self, provider: str, text: str, voice: str, lang: str, dst: Path) -> None:
+    @staticmethod
+    def _voice(provider: str, voice: str) -> str:
+        return "feiyu" if provider == "feiyu" else voice  # 肥鱼只有一个声音（风格 cute/gentle）；mini 的 speaker 可选
+
+    def _one(self, provider: str, text: str, voice: str, lang: str, dst: Path, style: str = "cute") -> None:
         last: Exception | None = None
         for attempt in range(3):
             t0 = time.perf_counter()
@@ -116,7 +121,7 @@ class TTS:
                     with urllib.request.urlopen(req, timeout=300) as r:
                         data = r.read()
                 else:
-                    data = self._feiyu(text, voice, lang)
+                    data = self._feiyu(text, style)
                 tmp = dst.with_suffix(".part")
                 tmp.write_bytes(data)  # 原始响应先落盘
                 if len(data) < 1000:
@@ -144,9 +149,34 @@ class TTS:
             tmp.unlink(missing_ok=True)
             out.unlink(missing_ok=True)
 
-    def _feiyu(self, text: str, voice: str, lang: str) -> bytes:
-        # 肥鱼 v0.4.0 的 HTTP 契约以服务文档为准；这里按 submit → wait → download 的最小形式留好接口，mini 不通时不会走到这里
-        raise TTSError("肥鱼后端在 mini 上未接通（mini 到 laptop:19880 不通），走 mini TTS")
+    def _feiyu(self, text: str, style: str) -> bytes:
+        """肥鱼（laptop）：POST /v1/speech → 轮询 /v1/jobs/<id> → GET /v1/jobs/<id>/audio。每次模型加载占 laptop ~7.8GB，
+        所以调用方成批发、串行提交（gpu_concurrency=1），结果按内容缓存。"""
+        base = (self.cfg.tts_feiyu_url or "").rstrip("/")
+        hdr = {"Authorization": f"Bearer {self.feiyu_key}"}
+
+        def call(method: str, path: str, body: dict[str, Any] | None = None, timeout: int = 60) -> bytes:
+            data = json.dumps(body).encode() if body is not None else None
+            req = urllib.request.Request(base + path, data=data, method=method, headers={**hdr, **({"Content-Type": "application/json"} if body is not None else {})})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+
+        job = json.loads(call("POST", "/v1/speech", {"text": text, "voice": "feiyu", "style": style}))
+        jid = job.get("id")
+        if not isinstance(jid, str) or not jid:
+            raise TTSError(f"肥鱼没有返回 job id：{str(job)[:120]}")
+        deadline = time.monotonic() + 420  # 首次加载约 45s，之后每句 6–8s
+        while True:
+            st = json.loads(call("GET", f"/v1/jobs/{jid}"))
+            status = str(st.get("status", ""))
+            if status in ("success", "succeeded", "completed", "done"):
+                break
+            if status in ("failed", "error", "cancelled", "canceled"):
+                raise TTSError(f"肥鱼 job {jid} {status}：{str(st)[:160]}")
+            if time.monotonic() > deadline:
+                raise TTSError(f"肥鱼 job {jid} 超时（仍是 {status}）")
+            time.sleep(1.5)
+        return call("GET", f"/v1/jobs/{jid}/audio", timeout=120)
 
 
 def atempo_chain(speed: float) -> str:

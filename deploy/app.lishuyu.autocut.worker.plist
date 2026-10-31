@@ -30,6 +30,8 @@
 		<string>/Users/lishuyu/services/autocut/worker.env</string>
 		<key>AUTOCUT_WORKER_SENSITIVE_WORDS</key>
 		<string>/Users/lishuyu/Codes/translate_upload_yt_bilibili/src/yt2bili/sensitive_words.txt</string>
+		<key>AUTOCUT_TTS_FEIYU_URL</key>
+		<string>http://100.117.175.117:19880</string>
 		<key>AUTOCUT_ENCODER</key>
 		<string>libx264</string>
 		<key>TMPDIR</key>

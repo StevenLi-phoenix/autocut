@@ -41,7 +41,8 @@ def run_commentary(ctx: Ctx, *, gateway: Gateway | None = None, tts: TTS | None 
     plan_rel = f"work/{stem}.autocut.json"
     hint = str(o.get("game") or o.get("hint") or "")
     style = str(o.get("style") or "轻松幽默、有节奏感、像朋友在旁边看你玩")
-    voice = str(o.get("voice") or "vivian")
+    voice = str(o.get("voice") or "vivian")  # 仅 mini 后端用；肥鱼固定 feiyu 声音
+    tts_style = str(o.get("tts_style") or "cute")  # 肥鱼风格：cute | gentle
     lang = str(o.get("lang") or "zh")
     lang_name, tts_lang = ("中文", "Chinese") if lang.startswith("zh") else ("English", "English")
     platform = str(o.get("platform") or "bilibili")
@@ -95,7 +96,7 @@ def run_commentary(ctx: Ctx, *, gateway: Gateway | None = None, tts: TTS | None 
 
     # 4. TTS（成批、缓存）+ 定速 / 缩短
     ctx.stage("tts", f"{len(lines)} 句")
-    _synth(tts, lines, voice, tts_lang)
+    _synth(tts, lines, voice, tts_lang, tts_style)
     for rnd in range(2):
         bad = C.fit(lines, D)
         if not bad:
@@ -110,7 +111,7 @@ def run_commentary(ctx: Ctx, *, gateway: Gateway | None = None, tts: TTS | None 
                     if k in bad and str(r["text"]).strip():
                         lines[k].text = str(r["text"]).strip()
                         lines[k].wav = None
-                _synth(tts, [ln for ln in lines if ln.wav is None], voice, tts_lang)
+                _synth(tts, [ln for ln in lines if ln.wav is None], voice, tts_lang, tts_style)
             except Exception as e:  # noqa: BLE001 —— 缩短失败就直接丢这些句子，不让整条流水线失败
                 log.warning("缩短台词失败：%s", e)
                 for i in bad:
@@ -179,12 +180,12 @@ def run_commentary(ctx: Ctx, *, gateway: Gateway | None = None, tts: TTS | None 
             "next": [{"cmd": f"autocut-remote fetch {ctx.job_id} {dv['preview']}", "why": "把预览下载到本机再 wechat_send_file 发给用户确认"}]}
 
 
-def _synth(tts: TTS, lines: list[C.Line], voice: str, lang: str) -> None:
+def _synth(tts: TTS, lines: list[C.Line], voice: str, lang: str, style: str = "cute") -> None:
     todo = [ln for ln in lines if ln.wav is None]
     if not todo:
         return
     try:
-        res = tts.synth_many([ln.text for ln in todo], voice=voice, lang=lang)
+        res = tts.synth_many([ln.text for ln in todo], voice=voice, lang=lang, style=style)
     except TTSError as e:
         raise PipelineError("tts_failed", f"配音合成失败：{e}", "mini 的 TTS 服务（:8098）是否在线；稍后重试", "tts") from e
     for ln, (p, d, prov) in zip(todo, res):
