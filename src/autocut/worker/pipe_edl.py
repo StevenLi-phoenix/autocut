@@ -159,8 +159,11 @@ def run_finish(ctx: Ctx, *, tts: TTS | None = None) -> dict[str, Any]:
         script = {"title": title, "lines": edl["lines"]}
         cplan_rel, title, _lines, kept_lines, provs = narrate_plan(ctx, plan, D, script, stem, int(o.get("max_lines", 80)), tts or TTS(ctx.app.cfg))
     platform = str(o.get("platform", "bilibili"))
-    ctx.stage("check-plan", platform)
-    chk = ctx.autocut("check", [cplan_rel, "--platform", platform, "--no-asr"], allow_fail=True)
+    longest = max((float(ingest.probe(ctx.path(p)).get("duration_s") or 0) for p in {s["source"] for s in segs}), default=0.0)
+    chk: dict[str, Any] = {}
+    if longest <= 3600:  # 体检要把引用到的素材整段做视觉分析（7 小时的 HEVC 要几十分钟）：素材太长就跳过并如实说明
+        ctx.stage("check-plan", platform)
+        chk = ctx.autocut("check", [cplan_rel, "--platform", platform, "--no-asr"], allow_fail=True)
     ctx.stage("render")
     ren = ctx.autocut("render", [cplan_rel, "--out-dir", "out", "--force", "--loudnorm", str(o.get("loudnorm", "-14"))])
     finals = [x for x in ctx.dir.joinpath("out").glob("*.mp4") if "preview" not in x.name and x.name.startswith(Path(cplan_rel).name.split(".")[0])]
@@ -174,6 +177,8 @@ def run_finish(ctx: Ctx, *, tts: TTS | None = None) -> dict[str, Any]:
              f"标题建议：{title}" if title else "", f"出片核验：{_verify(ren)}"]
     if "say" in provs:
         lines.insert(0, "⚠️ 配音降级：肥鱼不可用，用了 macOS 系统语音")
+    if not chk:
+        lines.append(f"体检已跳过：引用的素材最长 {longest / 3600:.1f} 小时，整段分析太慢（成片本身的核验照常做了）")
     if risks:
         lines.append("体检提示（留存风险信号，不是爆款保证）：" + "；".join(str(r.get("message", ""))[:70] for r in risks))
     if credits:
