@@ -40,12 +40,11 @@ class WorkerConfig:
     nice: int = 10
     ingest_python: str | None = None  # 烤肉 venv 的 python（复用其 yt-dlp / PO-Token / cookies 配置）
     ingest_env_file: str | None = None  # 烤肉 .env；只摘取白名单变量，不整体透传
-    secrets_file: str | None = None  # KEY=VALUE 文件（600）：AUTOCUT_LLM_KEY 等，不进 plist、不进日志
-    llm_base: str = "https://api.lishuyu.app/llm"
+    secrets_file: str | None = None  # KEY=VALUE 文件（600）：肥鱼 key、DSH 事件 token，不进 plist、不进日志
+    ocr_bin: str | None = None  # 编译好的 vision_ocr（烤肉仓库 scripts/vision_ocr.swift，Apple Vision，离线）；没配就不做 OCR
     tts_mini_url: str = "http://127.0.0.1:8098"
     tts_feiyu_url: str | None = None  # 肥鱼（laptop）；mini 到 laptop 19880 不通时自动回落 mini TTS
     tts_order: tuple[str, ...] = ("feiyu", "say")  # mini 的 Qwen3-TTS 已被退役（dsh-voice 2026-10-31），需要时用 AUTOCUT_TTS_ORDER=feiyu,mini,say
-    cny_per_usd: float = 7.2
     sensitive_words_file: str | None = None  # 烤肉的 sensitive_words.txt（一行一个）
     extra_env: dict[str, str] = field(default_factory=dict)
 
@@ -65,7 +64,7 @@ class WorkerConfig:
             ingest_python=e.get("AUTOCUT_WORKER_INGEST_PYTHON") or None,
             ingest_env_file=e.get("AUTOCUT_WORKER_INGEST_ENV_FILE") or None,
             secrets_file=e.get("AUTOCUT_WORKER_SECRETS_FILE") or None,
-            llm_base=e.get("AUTOCUT_LLM_BASE", "https://api.lishuyu.app/llm"),
+            ocr_bin=e.get("AUTOCUT_WORKER_OCR_BIN") or None,
             tts_mini_url=e.get("AUTOCUT_TTS_MINI_URL", "http://127.0.0.1:8098"),
             tts_feiyu_url=e.get("AUTOCUT_TTS_FEIYU_URL") or None,
             sensitive_words_file=e.get("AUTOCUT_WORKER_SENSITIVE_WORDS") or None,

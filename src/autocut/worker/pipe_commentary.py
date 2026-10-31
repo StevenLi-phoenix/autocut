@@ -18,8 +18,8 @@ from autocut.plan import Bed, Captions, Plan
 from autocut.recipes._common import make_source, stored_path
 from autocut.worker import commentary as C
 from autocut.worker import delivery, ingest
-from autocut.worker.llm import Gateway, image_part
-from autocut.worker.pipe_cut import UNCERTAIN_BELOW, _verify, guard_uncertain, pick_source
+from autocut.worker import signals
+from autocut.worker.pipe_cut import UNCERTAIN_BELOW, _verify, guard_mid_sentence, pick_source
 from autocut.worker.pipeline import Ctx, PipelineError, start
 from autocut.worker.tts import TTS, TTSError
 
@@ -27,17 +27,14 @@ if TYPE_CHECKING:
     from autocut.worker.server import App
 
 log = logging.getLogger(__name__)
-VISION_MODEL = "claude-haiku-5-5"  # 眼睛：无状态的看图说话（不是创作）
-BATCH = 8
 
 
 def _stem(src: str) -> str:
     return src.rsplit("/", 1)[-1].rsplit(".", 1)[0]
 
 
-def run_prepare(ctx: Ctx, *, gateway: Gateway | None = None) -> dict[str, Any]:
+def run_prepare(ctx: Ctx) -> dict[str, Any]:
     o = ctx.opts
-    gw = gateway or Gateway(ctx.app.cfg, ctx.dir)
     src = pick_source(ctx)
     stem = _stem(src)
     plan_rel = f"work/{stem}.autocut.json"
@@ -45,7 +42,7 @@ def run_prepare(ctx: Ctx, *, gateway: Gateway | None = None) -> dict[str, Any]:
 
     ctx.stage("cut", f"{src}（实况模式去停顿）")
     ctx.autocut("cut", [src, "--pace", str(o.get("pace", "natural")), "-o", plan_rel, "--force"])
-    guard = guard_uncertain(ctx.path(plan_rel), float(o.get("uncertain_below", UNCERTAIN_BELOW))) if o.get("conservative", True) else {"restored": 0, "seconds": 0.0}
+    guard = guard_mid_sentence(ctx.path(plan_rel))  # 规则校验层：停在句子中间的剪法改回保留；其余沿用配方的实况去停顿提案
     plan = Plan.load(ctx.path(plan_rel))
     out = plan.output()
     D = round(out.duration, 2)
@@ -53,21 +50,19 @@ def run_prepare(ctx: Ctx, *, gateway: Gateway | None = None) -> dict[str, Any]:
         raise PipelineError("too_short", f"去掉停顿后只有 {D:.1f}s，不值得配解说", "换一段更长的素材", "cut")
     source_id = out.kept()[0].source
 
-    ctx.stage("eyes", f"{D:.0f}s 成片，抽帧看画面")
-    times = C.frame_times(D, int(o.get("max_frames", 40)), float(o.get("frame_every", 0)))
+    ctx.stage("eyes", f"{D:.0f}s 成片，取关键帧拼图（确定性，不调任何模型）")
+    times = C.frame_times(D, int(o.get("max_frames", 36)), float(o.get("frame_every", 0)))
     fdir = ctx.dir / "work" / "frames"
-    fdir.mkdir(parents=True, exist_ok=True)
-    frames: list[dict[str, Any]] = []
-    for b in range(0, len(times), BATCH):
-        chunk = times[b:b + BATCH]
-        parts: list[dict[str, Any]] = []
-        for k, t in enumerate(chunk):
-            sid, st = C.out_to_src(out, t) or (source_id, 0.0)
-            parts.append(image_part(C.grab_frame(plan.source_path(sid), st, fdir / f"f{b + k:03d}.jpg")))
-        msg = [{"role": "user", "content": [{"type": "text", "text": C.vision_prompt(chunk, hint)}, *parts]}]
-        res = gw.chat_json(VISION_MODEL, msg, purpose="eyes", validate=C.validate_frames(len(chunk)), max_tokens=3500, temperature=0.2)
-        for t, fr in zip(chunk, res["frames"]):
-            frames.append({"t": t, "desc": str(fr["desc"])[:80]})
+    src_path = plan.source_path(source_id)
+
+    def map_time(t: float) -> tuple[Path, float]:
+        sid, st = C.out_to_src(out, t) or (source_id, 0.0)
+        return plan.source_path(sid), st
+
+    sheets = signals.frames_brief(src_path, times, fdir, stem, ocr_bin=ctx.app.cfg.ocr_bin, map_time=map_time)
+    for sh in sheets:
+        sh["path"] = str(Path(sh["path"]).relative_to(ctx.dir))
+    cuts = [round(t, 1) for t in (out.to_output_time(source_id, c) for c in Media(src_path).cuts()) if t is not None][:200]
     words = None
     try:
         from autocut.captions import load_words  # noqa: PLC0415
@@ -78,10 +73,10 @@ def run_prepare(ctx: Ctx, *, gateway: Gateway | None = None) -> dict[str, Any]:
     speech = [{"start": round(s["start"], 1), "end": round(s["end"], 1), "text": s["text"][:80]} for s in C.speech_intervals(words, out)][:60]
     max_lines = int(o.get("max_lines") or max(4, round(D / 60 * float(o.get("lines_per_min", 5)))))
     brief = {
-        "source": src, "game": hint, "duration": D, "frames": frames, "speech": speech,
+        "source": src, "game": hint, "duration": D, "sheets": sheets, "scene_cuts": cuts, "speech": speech,
         "limits": {"max_lines": max_lines, "chars_per_sec": C.CHARS_PER_SEC, "min_gap_s": C.MIN_GAP, "first_line_before_s": 3.0},
         "script_schema": {"title": "一句话标题", "lines": [{"at": "成片时间（秒），贴着对应画面", "text": "台词；字数上限 = (到下一句的间隔 - 0.25) × 4.2 × 1.2"}]},
-        "how": "按画面描述和原声写解说稿，用 ar pipeline JOB commentary_finish script_file=work/script.json（先把稿子写成 JSON 文件上传到 job 的 work/ 目录）或 script='{...}' 提交",
+        "how": "sheets 是带编号和时间标签的关键帧拼图：用 ar fetch 拉到本机再 read_image 看（没看清用 ar frame JOB t=秒 取单帧）；按画面和原声写解说稿，用 ar pipeline JOB commentary_finish script_file=work/script.json（先把稿子写成 JSON 文件上传到 job 的 work/ 目录）或 script='{...}' 提交",
     }
     (ctx.dir / "work" / f"{stem}.brief.json").write_text(json.dumps(brief, ensure_ascii=False, indent=1), encoding="utf-8")
     return {"ok": True, "state": "needs_agent", "needs": "script", "brief": brief, "guard": guard, "plan": plan_rel,
@@ -106,27 +101,15 @@ def _load_script(ctx: Ctx) -> dict[str, Any]:
     return raw
 
 
-def run_finish(ctx: Ctx, *, tts: TTS | None = None) -> dict[str, Any]:
+def narrate_plan(ctx: Ctx, plan: Plan, D: float, script: dict[str, Any], stem: str, max_lines: int, tts: TTS) -> tuple[str, str, list[C.Line], list[C.Line], list[str]]:
+    """校验解说稿 → TTS（成批、缓存）→ 定速 → 配音轨 → 把解说压低原声 + 字幕烧录写进方案并保存。commentary 与 edl 共用。"""
     o = ctx.opts
-    tts = tts or TTS(ctx.app.cfg)
-    src = pick_source(ctx)
-    stem = _stem(src)
-    plan_rel = f"work/{stem}.autocut.json"
-    if not ctx.path(plan_rel).exists():
-        raise PipelineError("not_prepared", "还没有 commentary_prepare 的结果", f"先 ar pipeline {ctx.job_id} commentary_prepare", "validate")
-    plan = Plan.load(ctx.path(plan_rel))
     out = plan.output()
-    D = round(out.duration, 2)
     voice = str(o.get("voice") or "vivian")
     tts_style = str(o.get("tts_style") or "cute")
     lang = str(o.get("lang") or "zh")
     tts_lang = "Chinese" if lang.startswith("zh") else "English"
-    platform = str(o.get("platform") or "bilibili")
-    brief = json.loads((ctx.dir / "work" / f"{stem}.brief.json").read_text(encoding="utf-8")) if (ctx.dir / "work" / f"{stem}.brief.json").exists() else {}
-    max_lines = int((brief.get("limits") or {}).get("max_lines", 12))
-
     ctx.stage("validate", "校验解说稿")
-    script = _load_script(ctx)
     try:
         C.validate_script(D, max_lines)(script)
     except (ValueError, KeyError, TypeError) as e:
@@ -158,6 +141,27 @@ def run_finish(ctx: Ctx, *, tts: TTS | None = None) -> dict[str, Any]:
     plan.notes.append(f"解说配音：{len(kept_lines)} 句（TTS {provs}，原声压低 {o.get('duck_db', 14)}dB），解说稿由 DSH agent 撰写")
     plan.save(cpath)
 
+    return cplan_rel, title, lines, kept_lines, provs
+
+
+def run_finish(ctx: Ctx, *, tts: TTS | None = None) -> dict[str, Any]:
+    o = ctx.opts
+    tts = tts or TTS(ctx.app.cfg)
+    src = pick_source(ctx)
+    stem = _stem(src)
+    plan_rel = f"work/{stem}.autocut.json"
+    if not ctx.path(plan_rel).exists():
+        raise PipelineError("not_prepared", "还没有 commentary_prepare 的结果", f"先 ar pipeline {ctx.job_id} commentary_prepare", "validate")
+    plan = Plan.load(ctx.path(plan_rel))
+    out = plan.output()
+    D = round(out.duration, 2)
+    platform = str(o.get("platform") or "bilibili")
+    brief = json.loads((ctx.dir / "work" / f"{stem}.brief.json").read_text(encoding="utf-8")) if (ctx.dir / "work" / f"{stem}.brief.json").exists() else {}
+    max_lines = int((brief.get("limits") or {}).get("max_lines", 12))
+
+    ctx.stage("validate", "校验解说稿")
+    script = _load_script(ctx)
+    cplan_rel, title, lines, kept_lines, provs = narrate_plan(ctx, plan, D, script, stem, max_lines, tts)
     ctx.stage("check-plan", platform)
     chk = ctx.autocut("check", [cplan_rel, "--platform", platform, "--no-asr"], allow_fail=True)
     ctx.stage("render")

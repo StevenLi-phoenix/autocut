@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from autocut.worker import delivery, ingest, policy
+from autocut.worker import delivery, ingest, policy, signals
 from autocut.worker.config import WorkerConfig
 from autocut.worker.policy import PolicyError
 from autocut.worker.runner import Runner
@@ -111,6 +111,16 @@ class App:
             if not fn:
                 raise PolicyError("no_such_pipeline", f"没有这个流水线：{sub[1]}", f"可用：{'、'.join(sorted(self.pipelines)) or '（暂无）'}")
             return 200, {"ok": True, "run": fn(self, job_id, body)}
+        if sub == ["frame"] and method == "POST":  # 按时间点取一帧（agent 用 read_image 看）
+            src = policy.inside(d, str(body.get("source", "")))
+            t = float(body.get("t", 0))
+            if t < 0:
+                raise PolicyError("bad_time", "t 不能为负", "秒数")
+            w = max(160, min(int(body.get("width", 960)), 1920))
+            dst = d / "work" / "frames-req" / f"{src.stem}-{int(t * 10):07d}.jpg"
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            signals.grab(src, t, dst, width=w)
+            return 200, {"ok": True, "path": str(dst.relative_to(d)), "next": [{"cmd": f"autocut-remote fetch {job_id} {dst.relative_to(d)}", "why": "拉到本机后用 read_image 看"}]}
         if sub == ["preview"] and method == "POST":  # 重新压预览（微信上传超时时用更小的）
             mib = float(body.get("max_mib", 4))
             st = delivery.state(self.store, job_id)
@@ -163,6 +173,9 @@ class App:
             full = [self.cfg.ingest_python, str(Path(ingest_ytdlp.__file__)), "--url", str(url), "--out", str(d / "src"), "--meta", str(meta)]
             run = self.runner.submit_raw(job_id, "ingest", "ingest", full, heavy=False, env=ingest.ingest_env(self.cfg), note=str(body.get("note", "")), args=[str(url)])
             return self._run_brief(run)
+        if body.get("inbox_link"):
+            e = ingest.link_inbox(self.cfg, self.store, job_id, str(body["inbox_link"]))
+            return {"id": None, "status": "ok", "kind": "ingest", "registered": e["id"], "source": e}
         if inbox:
             e = ingest.from_inbox(self.cfg, self.store, job_id, str(inbox))
             return {"id": None, "status": "ok", "kind": "ingest", "registered": e["id"], "source": e}
@@ -299,6 +312,8 @@ def make_server(cfg: WorkerConfig, app: App | None = None) -> ThreadingHTTPServe
 def main() -> int:
     logging.basicConfig(level=os.environ.get("AUTOCUT_WORKER_LOG", "INFO"), stream=sys.stderr, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     cfg = WorkerConfig.from_env()
+    os.environ["AUTOCUT_CACHE"] = str(cfg.root / "_worker" / "cache")  # 分析缓存不写到素材旁边（inbox 是只读的）
+    policy.EXTRA_READ_ROOTS.append(cfg.root / "inbox")
     if cfg.host not in ("127.0.0.1", "::1", "localhost"):
         log.error("worker 只允许绑定回环地址，拒绝 %s", cfg.host)
         return 2

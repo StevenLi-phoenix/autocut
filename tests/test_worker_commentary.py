@@ -16,7 +16,6 @@ import pytest
 from autocut.plan import Output, Segment
 from autocut.worker import commentary as C
 from autocut.worker.config import WorkerConfig
-from autocut.worker.llm import Gateway, LLMError, extract_json
 from autocut.worker.tts import TTS, TTSError, wav_duration
 
 pytestmark = pytest.mark.unit
@@ -45,11 +44,6 @@ def test_frame_times_even_and_capped() -> None:
     assert C.frame_times(0) == []
 
 
-def test_extract_json_tolerates_fences_and_noise() -> None:
-    assert extract_json('好的：\n```json\n{"a": 1}\n```\n以上') == {"a": 1}
-    assert extract_json('结果 [1,2,3] 完') == [1, 2, 3]
-    with pytest.raises(ValueError):
-        extract_json("没有 json")
 
 
 def test_validate_script_rules() -> None:
@@ -105,79 +99,6 @@ def test_speech_intervals_merge_close_words() -> None:
     assert len(sp) == 2 and sp[0]["start"] == pytest.approx(1.25) and "世界" in sp[0]["text"]
 
 
-# ------------------------------------------------------------------ LLM 网关（本地假网关）
-
-
-class FakeGateway(BaseHTTPRequestHandler):
-    spend = 0.0
-    replies: list[str] = []
-    seen: list[dict[str, Any]] = []
-
-    def log_message(self, *a: Any) -> None:
-        pass
-
-    def do_GET(self) -> None:  # /api/me
-        body = json.dumps({"spend_usd": FakeGateway.spend}).encode()
-        self.send_response(200)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_POST(self) -> None:
-        n = int(self.headers["Content-Length"])
-        req = json.loads(self.rfile.read(n))
-        FakeGateway.seen.append(req)
-        FakeGateway.spend += 0.05  # 每次调用 $0.05（网关差值）
-        text = FakeGateway.replies.pop(0) if FakeGateway.replies else "{}"
-        body = json.dumps({"choices": [{"message": {"content": text}, "finish_reason": "stop"}], "usage": {"total_tokens": 100}}).encode()
-        self.send_response(200)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-
-@pytest.fixture
-def fake_gw(tmp_path: Path) -> Any:
-    FakeGateway.spend, FakeGateway.replies, FakeGateway.seen = 0.0, [], []
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeGateway)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    secrets = tmp_path / "w.env"
-    secrets.write_text("AUTOCUT_LLM_KEY=llmgw_test\n")
-    cfg = WorkerConfig(root=tmp_path, llm_base=f"http://127.0.0.1:{srv.server_address[1]}", secrets_file=str(secrets))
-    yield cfg
-    srv.shutdown()
-
-
-def test_gateway_saves_raw_before_parse_and_tracks_spend(fake_gw: WorkerConfig, tmp_path: Path) -> None:
-    jd = tmp_path / "job"
-    gw = Gateway(fake_gw, jd, budget_cny=2.0)
-    FakeGateway.replies = ['```json\n{"ok": true}\n```']
-    obj = gw.chat_json("m", [{"role": "user", "content": "hi"}], purpose="t")
-    assert obj == {"ok": True}
-    raw = next((jd / "work" / "llm").glob("001-t.json"))
-    assert "choices" in json.loads(raw.read_text())
-    assert gw.spent_usd() > 0  # 只记估价日志，不拦截（上限由网关 key 兜底）
-    assert json.loads((jd / "work" / "budget.json").read_text())["by_purpose"]["t"] == pytest.approx(gw.spent_usd())
-
-
-def test_gateway_bad_json_retries_once_then_fails(fake_gw: WorkerConfig, tmp_path: Path) -> None:
-    gw = Gateway(fake_gw, tmp_path / "job", 2.0)
-    FakeGateway.replies = ["不是 json", '{"fixed": 1}']
-    assert gw.chat_json("m", [{"role": "user", "content": "x"}], purpose="t") == {"fixed": 1}
-    assert "不能用" in FakeGateway.seen[-1]["messages"][-1]["content"]
-    FakeGateway.replies = ["坏", "还是坏"]
-    with pytest.raises(LLMError) as e:
-        gw.chat_json("m", [{"role": "user", "content": "x"}], purpose="t2")
-    assert e.value.code == "llm_bad_json"
-
-
-def test_gateway_without_key_says_how_to_fix(tmp_path: Path) -> None:
-    gw = Gateway(WorkerConfig(root=tmp_path), tmp_path / "job", 2.0)
-    with pytest.raises(LLMError) as e:
-        gw.chat("m", [], purpose="t")
-    assert e.value.code == "no_llm_key" and "AUTOCUT_LLM_KEY" in e.value.fix
-
-
 # ------------------------------------------------------------------ TTS（本地假 mini TTS）
 
 
@@ -230,33 +151,10 @@ def test_tts_failure_is_reported_not_silent(tmp_path: Path, monkeypatch: pytest.
     srv.shutdown()
 
 
-def test_token_estimate_prices() -> None:
-    from autocut.worker.llm import estimate_usd
-
-    assert estimate_usd("claude-sonnet-5-5", {"prompt_tokens": 1_000_000, "completion_tokens": 100_000}) == pytest.approx(4.5)
-    assert estimate_usd("unknown-model", {"total_tokens": 1_000_000}) == pytest.approx(3.0)
 
 
-def test_gateway_has_no_budget_gate(fake_gw: WorkerConfig, tmp_path: Path) -> None:
-    """DSH 是唯一的大脑，worker 不自建预算器：不会因为"花费"拒绝调用（上限由网关 key 的 limit_usd 兜底）。"""
-    gw = Gateway(fake_gw, tmp_path / "job")
-    FakeGateway.replies = ["{}"] * 5
-    for i in range(5):
-        gw.chat("claude-sonnet-5-5", [{"role": "user", "content": "x" * 1000}], purpose=f"p{i}")
-    assert len(FakeGateway.seen) == 5 and not hasattr(gw, "spent_cny")
 
 
-def test_claude_request_params(fake_gw: WorkerConfig, tmp_path: Path) -> None:
-    """Claude 5 系列：不传 temperature；sonnet/opus 关掉预思考（否则正文为空）；haiku 不能带 thinking 参数。"""
-    gw = Gateway(fake_gw, tmp_path / "job", 100.0)
-    FakeGateway.replies = ["{}", "{}", "{}"]
-    gw.chat("claude-sonnet-5-5", [{"role": "user", "content": "x"}], purpose="a", temperature=0.7)
-    gw.chat("claude-haiku-5-5", [{"role": "user", "content": "x"}], purpose="b", temperature=0.7)
-    gw.chat("deepseek-flash", [{"role": "user", "content": "x"}], purpose="c", temperature=0.7)
-    s, h, d = FakeGateway.seen[-3:]
-    assert "temperature" not in s and s["thinking"] == {"type": "between_tools"}
-    assert "temperature" not in h and "thinking" not in h
-    assert d["temperature"] == 0.7 and "thinking" not in d
 
 
 def test_tts_falls_back_to_system_voice_when_services_down(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -268,31 +166,6 @@ def test_tts_falls_back_to_system_voice_when_services_down(tmp_path: Path, monke
     assert t.stats["provider"] == {"say": 1}
 
 
-def test_chat_json_doubles_max_tokens_when_truncated(fake_gw: WorkerConfig, tmp_path: Path) -> None:
-    """finish_reason=length 说明 JSON 被截断：翻倍 max_tokens 重来，而不是把半截输出当 JSON 解析失败。"""
-    gw = Gateway(fake_gw, tmp_path / "job", 100.0)
-    orig = FakeGateway.do_POST
-    calls = {"n": 0}
-
-    def truncating(self):
-        calls["n"] += 1
-        n = int(self.headers["Content-Length"])
-        req = json.loads(self.rfile.read(n))
-        FakeGateway.seen.append(req)
-        FakeGateway.spend += 0.01
-        first = calls["n"] == 1
-        body = json.dumps({"choices": [{"message": {"content": '{"a": [1, 2' if first else '{"a": [1, 2]}'}, "finish_reason": "length" if first else "stop"}], "usage": {"total_tokens": 50}}).encode()
-        self.send_response(200)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    FakeGateway.do_POST = truncating  # type: ignore[method-assign]
-    try:
-        obj = gw.chat_json("deepseek-flash", [{"role": "user", "content": "x"}], purpose="t", max_tokens=100)
-    finally:
-        FakeGateway.do_POST = orig  # type: ignore[method-assign]
-    assert obj == {"a": [1, 2]} and FakeGateway.seen[-1]["max_tokens"] == 200
 
 
 class FakeFeiyu(BaseHTTPRequestHandler):

@@ -1,6 +1,8 @@
-"""cut 流水线（MVP-A 口播/录课/实况粗剪）：cut → check → render → 预览 → 摘要，停在"等用户确认"。
+"""cut（口播/录课/实况粗剪）：两段式——autocut 配方只给"提案"，剪不剪由 DSH agent 决定，规则只做校验。
 
-不选段，没有选段风险；所有风险信号（拿不准处数、体检条目、核验结果）都写进摘要，让 agent 如实转告。
+prepare：autocut cut 出提案（每个停顿/重说/口头禅一个候选，带理由、把握度和上下文文字）→ brief，停在 needs_agent。
+finish ：agent 交回决定（keep=恢复成保留的候选 id，cut=额外要剪掉的片段 id）→ 规则校验（id 存在、不剪锁定片段、
+         "停在句子中间"的剪法自动改回保留并如实报告、最多剪掉 70%）→ 体检 → render → 预览 → 等用户确认。
 """
 
 from __future__ import annotations
@@ -8,6 +10,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import json
 
 from autocut.worker import delivery, ingest
 from autocut.worker.pipeline import Ctx, PipelineError, start
@@ -20,29 +24,8 @@ log = logging.getLogger(__name__)
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
 
 
-UNCERTAIN_BELOW = 0.75
-
-
-def guard_uncertain(plan_path: Path, below: float) -> dict[str, Any]:
-    """无人核对时的保守策略：置信度低于阈值的"剪"全部改回"留"（宁可多留，不要把话剪断）。就地改方案，revision +1。"""
-    from autocut.plan import Plan  # noqa: PLC0415
-
-    plan = Plan.load(plan_path)
-    n, secs = 0, 0.0
-    for seg in plan.output().segments:
-        mid = "句子中间" in seg.detail  # 配方已标出"停在句子中间"：置信度再高也不在无人核对时冒险
-        if seg.action == "cut" and (seg.confidence < below or mid) and not seg.locked:
-            seg.action = "keep"
-            why = "停在句子中间" if mid and seg.confidence >= below else f"把握度 {seg.confidence:.2f} < {below}"
-            seg.detail = f"{seg.detail}（流水线保守策略：{why}，改为保留）".strip()
-            seg.evidence["guard_restored"] = True
-            n += 1
-            secs += seg.out_duration
-    if n:
-        plan.notes.append(f"流水线保守策略：{n} 处把握度低于 {below} 的剪法改回保留，多保留 {secs:.1f}s（无人逐条核对时宁可多留）")
-        plan.save()
-    log.info("guard：%s 处改回保留 %.1fs（阈值 %.2f）", n, secs, below)
-    return {"restored": n, "seconds": round(secs, 1), "below": below}
+UNCERTAIN_BELOW = 0.75  # 配方的"拿不准"阈值（只用于 brief 里标注，不再自动拍板）
+MAX_REMOVED = 0.7
 
 
 def pick_source(ctx: Ctx) -> str:
@@ -57,67 +40,133 @@ def pick_source(ctx: Ctx) -> str:
     raise PipelineError("no_source", "这个 job 里还没有视频素材", "先 ingest（--url）或 upload，再跑流水线")
 
 
-def run_cut(ctx: Ctx) -> dict[str, Any]:
+def guard_mid_sentence(plan_path: Path) -> dict[str, Any]:
+    """规则校验层：配方已标出"停在句子中间"的剪法，不管谁决定的都改回保留（宁可多留，不要把话剪断）。就地改方案。"""
+    from autocut.plan import Plan  # noqa: PLC0415
+
+    plan = Plan.load(plan_path)
+    n, secs = 0, 0.0
+    for seg in plan.output().segments:
+        if seg.action == "cut" and "句子中间" in seg.detail and not seg.locked:
+            seg.action = "keep"
+            seg.detail = f"{seg.detail}（规则校验：停在句子中间，改为保留）".strip()
+            seg.evidence["guard_restored"] = True
+            n += 1
+            secs += seg.out_duration
+    if n:
+        plan.notes.append(f"规则校验：{n} 处停在句子中间的剪法改回保留，多保留 {secs:.1f}s")
+        plan.save()
+    return {"restored": n, "seconds": round(secs, 1)}
+
+
+def run_prepare(ctx: Ctx) -> dict[str, Any]:
+    from autocut.plan import Plan  # noqa: PLC0415
+
     o = ctx.opts
     src = pick_source(ctx)
     stem = src.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-    plan = f"work/{stem}.autocut.json"
-    pace = str(o.get("pace", "natural"))
-    platform = str(o.get("platform", "bilibili"))
-
-    ctx.stage("cut", f"{src} pace={pace}")
-    args = [src, "--pace", pace, "-o", plan, "--force"]
+    plan_rel = f"work/{stem}.autocut.json"
+    ctx.stage("cut", f"{src} pace={o.get('pace', 'natural')}（出提案）")
+    args = [src, "--pace", str(o.get("pace", "natural")), "-o", plan_rel, "--force"]
     for flag in ("no_retakes", "no_fillers"):
         if o.get(flag):
             args.append("--" + flag.replace("_", "-"))
     if o.get("lang"):
         args += ["--lang", str(o["lang"])]
-    cut = ctx.autocut("cut", args)
-    summ = cut.get("summary", {})
+    ctx.autocut("cut", args)
+    plan = Plan.load(ctx.path(plan_rel))
+    out = plan.output()
+    segs = out.segments
+    cands = []
+    for i, s in enumerate(segs):
+        if s.action != "cut":
+            continue
+        before = next((x.text for x in reversed(segs[:i]) if x.text), "")[-30:]
+        after = next((x.text for x in segs[i + 1:] if x.text), "")[:30]
+        cands.append({"id": s.id, "at": round(s.start, 1), "dur": round(s.end - s.start, 2), "reason": s.reason, "conf": s.confidence, "detail": s.detail, "before": before, "after": after})
+    src_total = sum(x.src_duration for x in segs)
+    removed = sum(x.src_duration for x in segs if x.action == "cut")
+    brief = {"source": src, "source_seconds": round(src_total, 1), "proposed_removed_seconds": round(removed, 1), "candidates_total": len(cands), "candidates": cands[:400], "truncated": max(0, len(cands) - 400),
+             "uncertain_below": UNCERTAIN_BELOW,
+             "how": "提案里每个候选是配方想剪掉的一段（停顿/重说/口头禅）。你来决定：恢复哪些（keep=[id…]：把握度低、停在句子中间、是修辞性重复、剪了会让语气突兀的），"
+                    "还想额外剪掉哪些（cut=[片段 id…]，id 用 `ar run JOB show work/x.autocut.json --around mm:ss` 查）。提交：ar pipeline JOB cut_finish keep='[…]' cut='[…]'；"
+                    "规则会拦住：不存在的 id、锁定片段、停在句子中间的剪法（自动改回保留）、剪掉超过 70%"}
+    return {"ok": True, "state": "needs_agent", "needs": "cut_decisions", "brief": brief, "plan": plan_rel,
+            "next": [{"cmd": f"autocut-remote pipeline {ctx.job_id} cut_finish keep='[]' cut='[]'", "why": "做出决定后提交（空列表 = 接受提案，规则仍会校验）"}]}
 
-    guard: dict[str, Any] = {"restored": 0, "seconds": 0.0}
-    if o.get("conservative", True):
-        ctx.stage("guard", "拿不准的剪法一律改成保留")
-        guard = guard_uncertain(ctx.path(plan), float(o.get("uncertain_below", UNCERTAIN_BELOW)))
 
+def run_finish(ctx: Ctx) -> dict[str, Any]:
     from autocut.plan import Plan  # noqa: PLC0415
 
-    after = Plan.load(ctx.path(plan)).summary()["outputs"][0]
-    summ = {**summ, **{k: v for k, v in after.items() if k in ("duration", "removed", "cut", "source_span")}}
+    o = ctx.opts
+    src = pick_source(ctx)
+    stem = src.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    plan_rel = f"work/{stem}.autocut.json"
+    if not ctx.path(plan_rel).exists():
+        raise PipelineError("not_prepared", "还没有 cut_prepare 的提案", f"先 ar pipeline {ctx.job_id} cut_prepare", "validate")
+    ctx.stage("validate", "校验 agent 的决定")
+    plan = Plan.load(ctx.path(plan_rel))
+    out = plan.output()
+    ids = {s.id: s for s in out.segments}
 
+    def lst(k: str) -> list[str]:
+        v = o.get(k) or []
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except ValueError:
+                raise PipelineError("bad_decisions", f"{k} 不是合法 JSON 数组", f"例如 {k}='[\"d012\",\"d031\"]'", "validate") from None
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            raise PipelineError("bad_decisions", f"{k} 必须是片段 id 的数组", "", "validate")
+        return v
+
+    keep, cut = lst("keep"), lst("cut")
+    unknown = [i for i in [*keep, *cut] if i not in ids]
+    if unknown:
+        raise PipelineError("unknown_segment", f"方案里没有这些片段：{unknown[:10]}", "id 以 brief.candidates 或 `show` 为准，不要编", "validate", details=unknown)
+    locked = [i for i in cut if ids[i].locked]
+    if locked or set(keep) & set(cut):
+        raise PipelineError("bad_decisions", f"锁定的片段不能剪：{locked}；或同一个 id 同时在 keep 和 cut 里：{sorted(set(keep) & set(cut))}", "改正后重新提交", "validate")
+    for i in keep:
+        ids[i].action = "keep"
+        ids[i].detail = f"{ids[i].detail}（agent 决定保留）".strip()
+        ids[i].evidence["agent"] = "keep"
+    for i in cut:
+        ids[i].action = "cut"
+        ids[i].detail = f"{ids[i].detail}（agent 决定剪掉）".strip()
+        ids[i].evidence["agent"] = "cut"
+    plan.notes.append(f"剪辑决定由 DSH agent 做出：恢复 {len(keep)} 个、额外剪掉 {len(cut)} 个提案外片段；规则只做校验")
+    plan.save()
+    guard = guard_mid_sentence(ctx.path(plan_rel))
+    plan = Plan.load(ctx.path(plan_rel))
+    summ = plan.summary()["outputs"][0]
+    total = sum(x.src_duration for x in plan.output().segments)
+    if total and float(summ.get("removed", 0)) / total > MAX_REMOVED:
+        raise PipelineError("too_much_removed", f"这样会剪掉 {summ.get('removed', 0):.0f}s / {total:.0f}s（>{MAX_REMOVED:.0%}）", "多保留一些再提交；确实要剪这么多请先问用户", "validate")
+    platform = str(o.get("platform", "bilibili"))
     ctx.stage("check-plan", platform)
-    chk = ctx.autocut("check", [plan, "--platform", platform, "--no-asr"], allow_fail=True)
-
+    chk = ctx.autocut("check", [plan_rel, "--platform", platform, "--no-asr"], allow_fail=True)
     ctx.stage("render")
-    out_dir = "out"
-    ren = ctx.autocut("render", [plan, "--out-dir", out_dir, "--force", "--loudnorm", str(o.get("loudnorm", "-14"))])
-    finals = [x for x in ctx.dir.joinpath(out_dir).glob("*.mp4") if "preview" not in x.name]
+    ren = ctx.autocut("render", [plan_rel, "--out-dir", "out", "--force", "--loudnorm", str(o.get("loudnorm", "-14"))])
+    finals = [x for x in ctx.dir.joinpath("out").glob("*.mp4") if "preview" not in x.name]
     if not finals:
         raise PipelineError("no_output", "render 成功但没有找到成片", "看 render 的 JSON", "render")
     final = sorted(finals, key=lambda p: p.stat().st_mtime)[-1]
-    rel_final = f"{out_dir}/{final.name}"
-
-    ctx.stage("preview", "≤23MiB 确认用")
-    prev = delivery.make_preview(final, ctx.dir / out_dir / f"preview-{final.stem}.mp4", ffmpeg="ffmpeg")
-
-    verify = _verify(ren)
+    ctx.stage("preview", "确认用预览")
+    prev = delivery.make_preview(final, ctx.dir / "out" / f"preview-{final.stem}.mp4")
     credits = ingest.credits_text(ctx.app.store, ctx.job_id)
     risks = [i for i in (chk.get("items") or []) if i.get("severity") in ("risk", "warn")][:5] if chk.get("ok") else []
-    summary_lines = [
-        f"{summ.get('source_span', 0):.0f}s → {summ.get('duration', 0):.0f}s，剪掉 {summ.get('removed', 0):.0f}s（{summ.get('cut', {})}）",
-        f"拿不准 {summ.get('uncertain_total', 0)} 处，其中 {guard['restored']} 处（含停在句子中间的）剪法被保守策略改回保留（多保留 {guard['seconds']:.0f}s），没有逐条人工核对",
-        f"出片核验：{verify}",
-    ]
-    if chk.get("ok") and risks:
-        summary_lines.append("体检提示（留存风险信号，不是爆款保证）：" + "；".join(str(r.get("message", ""))[:80] for r in risks))
+    lines = [f"{summ.get('source_span', total):.0f}s → {summ.get('duration', 0):.0f}s，剪掉 {summ.get('removed', 0):.0f}s（{summ.get('cut', {})}）",
+             f"剪辑决定由 DSH agent 做出（恢复 {len(keep)} 个候选，额外剪掉 {len(cut)} 个）；规则校验把 {guard['restored']} 处停在句子中间的剪法改回保留（多留 {guard['seconds']}s）",
+             f"出片核验：{_verify(ren)}"]
+    if risks:
+        lines.append("体检提示（留存风险信号，不是爆款保证）：" + "；".join(str(r.get("message", ""))[:80] for r in risks))
     if credits:
-        summary_lines.append("需标注转载：" + credits.replace("\n", " / "))
-    summary = "\n".join(summary_lines)
-    dv = {"id": "main", "final": rel_final, "preview": f"{out_dir}/{final.name.replace(final.stem, 'preview-' + final.stem)}", "plan": plan,
-          "extras": [p for p in (f"{out_dir}/{final.stem}.srt",) if (ctx.dir / p).exists()]}
+        lines.append("需标注转载：" + credits.replace("\n", " / "))
+    summary = "\n".join(lines)
+    dv = {"id": "main", "final": f"out/{final.name}", "preview": f"out/preview-{final.stem}.mp4", "plan": plan_rel, "extras": [p for p in (f"out/{final.stem}.srt",) if (ctx.dir / p).exists()]}
     delivery.mark_awaiting(ctx.app.store, ctx.job_id, [dv], summary)
-    return {"ok": True, "deliverables": [dv], "preview": prev, "summary": summary, "state": "awaiting_confirmation",
-            "guard": guard, "cut": {"plan": plan, "summary": {k: summ.get(k) for k in ("source_span", "duration", "removed", "cut", "uncertain_total", "degraded")}},
+    return {"ok": True, "deliverables": [dv], "preview": prev, "summary": summary, "state": "awaiting_confirmation", "guard": guard,
             "next": [{"cmd": f"autocut-remote fetch {ctx.job_id} {dv['preview']}", "why": "把预览下载到本机再 wechat_send_file 发给用户确认"}]}
 
 
@@ -132,5 +181,9 @@ def _verify(ren: dict[str, Any]) -> str:
     return f"未通过 {r0.get('warnings') or v}"
 
 
-def pipeline_cut(app: App, job_id: str, opts: dict[str, Any]) -> dict[str, Any]:
-    return start(app, job_id, "cut", opts, run_cut)
+def pipeline_prepare(app: App, job_id: str, opts: dict[str, Any]) -> dict[str, Any]:
+    return start(app, job_id, "cut_prepare", opts, run_prepare)
+
+
+def pipeline_finish(app: App, job_id: str, opts: dict[str, Any]) -> dict[str, Any]:
+    return start(app, job_id, "cut_finish", opts, run_finish)

@@ -48,13 +48,22 @@ def check_job_id(job_id: str) -> str:
     return job_id
 
 
+EXTRA_READ_ROOTS: list[Path] = []  # 允许 job 目录里的符号链接指向的只读根（<root>/inbox）：大素材不复制，只读使用
+
+
 def inside(job_dir: Path, rel: str) -> Path:
-    """rel（相对 job 目录或绝对路径）解析后必须在 job 目录内（含符号链接解析），返回解析后的绝对路径。"""
+    """rel（相对 job 目录或绝对路径）解析后必须在 job 目录内（含符号链接解析；指向 EXTRA_READ_ROOTS 的链接例外），返回解析后的绝对路径。"""
     base = job_dir.resolve()
     target = (base / rel).resolve() if not rel.startswith("~") else Path("/nonexistent-home-expansion-blocked")
     try:
         target.relative_to(base)
     except ValueError:
+        for root in EXTRA_READ_ROOTS:
+            try:
+                target.relative_to(root.resolve())
+                return target
+            except ValueError:
+                continue
         raise PolicyError("path_outside_job", f"路径在 job 目录之外：{rel}", f"只能使用 job 目录内的文件（{base}），用相对路径，例如 src/talk.mp4") from None
     return target
 

@@ -35,7 +35,7 @@ def build_env(cfg: WorkerConfig) -> dict[str, str]:
         "NO_COLOR": "1",
         "PYTHONUNBUFFERED": "1",
     }
-    for k in ("AUTOCUT_WHISPER_MODEL", "AUTOCUT_WHISPER_CLI", "TMPDIR", "PYTHONPATH"):
+    for k in ("AUTOCUT_WHISPER_MODEL", "AUTOCUT_WHISPER_CLI", "TMPDIR", "PYTHONPATH", "AUTOCUT_CACHE"):
         if os.environ.get(k):
             env[k] = os.environ[k]
     env.update(cfg.extra_env)
@@ -91,6 +91,20 @@ class Runner:
         with self._cv:
             self._cv.notify_all()
         return self._fresh(job_id, run_id)
+
+    def heavy_slot(self):
+        """流水线自己起的重活（例如延时摄影的中间片段）也占重活槽位，不和别的重活抢。"""
+        import contextlib  # noqa: PLC0415
+
+        @contextlib.contextmanager
+        def cm():
+            self._heavy.acquire()
+            try:
+                yield
+            finally:
+                self._heavy.release()
+
+        return cm()
 
     def notify(self) -> None:
         with self._cv:

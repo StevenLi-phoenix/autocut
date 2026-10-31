@@ -118,3 +118,20 @@ def from_inbox(cfg: WorkerConfig, store: Store, job_id: str, rel: str, kind: str
     dst = store.job_dir(job_id) / "src" / src.name
     shutil.copy2(src, dst)
     return register_source(store, job_id, {"kind": kind, "file": f"src/{dst.name}", "origin": f"inbox/{rel}", **probe(dst)})
+
+
+def link_inbox(cfg: WorkerConfig, store: Store, job_id: str, rel: str) -> dict[str, Any]:
+    """把 <root>/inbox/ 下的大文件以符号链接放进 job 的 src/（不复制，只读使用）。inbox 以外的路径一律拒绝。"""
+    inbox = (cfg.root / "inbox").resolve()
+    src = (inbox / rel).resolve()
+    try:
+        src.relative_to(inbox)
+    except ValueError:
+        raise policy.PolicyError("path_outside_inbox", f"只能链接 inbox 下的文件：{rel}", f"先把文件放到 {inbox}") from None
+    if not src.is_file() or src.suffix.lower() not in MEDIA_EXT:
+        raise policy.PolicyError("bad_inbox_file", f"inbox 里没有可用文件：{rel}", "检查文件名和扩展名")
+    dst = store.job_dir(job_id) / "src" / src.name
+    if dst.is_symlink() or dst.exists():
+        dst.unlink()
+    dst.symlink_to(src)
+    return register_source(store, job_id, {"kind": "inbox_link", "file": f"src/{src.name}", "origin": f"inbox/{rel}", **probe(src)})

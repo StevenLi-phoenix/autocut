@@ -113,12 +113,8 @@ def start(app: App, job_id: str, name: str, opts: dict[str, Any], fn: Callable[[
                 err["details"] = e.details
             run.update(status="failed", result={"ok": False, "error": err})
         except Exception as e:  # noqa: BLE001
-            from autocut.worker.llm import LLMError  # noqa: PLC0415
-
             stage = (run.get("stages") or [{}])[-1].get("name", "")
-            if isinstance(e, LLMError):
-                run.update(status="failed", result={"ok": False, "error": {"code": e.code, "message": e.message, "fix": e.fix, "stage": stage}})
-            elif isinstance(e, policy.PolicyError):
+            if isinstance(e, policy.PolicyError):
                 run.update(status="failed", result={"ok": False, "error": {"code": e.code, "message": e.message, "fix": e.fix}})
             else:
                 log.error("pipeline 异常 %s/%s\n%s", job_id, run_id, traceback.format_exc())
