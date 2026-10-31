@@ -32,7 +32,8 @@ cp "$APP/deploy/$LABEL.plist" "$PLIST"
 plutil -lint "$PLIST"
 if [ "${1:-}" = "--restart" ]; then
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-  launchctl bootstrap "gui/$(id -u)" "$PLIST"
+  for _ in $(seq 1 20); do launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || break; sleep 0.5; done
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" || { sleep 2; launchctl bootstrap "gui/$(id -u)" "$PLIST"; }
   sleep 3
   launchctl print "gui/$(id -u)/$LABEL" | grep -E "state|pid|last exit" || true
   curl -s --max-time 5 http://127.0.0.1:8102/health || echo "health 未响应，看 $APP/logs/worker.err.log"
