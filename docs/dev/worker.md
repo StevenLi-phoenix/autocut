@@ -51,7 +51,7 @@ DSH 主 agent 是唯一的大脑：剪哪里、写解说稿、选段、挑镜头
 - `commentary_prepare` → `commentary_finish`：prepare = cut + 关键帧拼图（带编号和时间）+ 场景切换 + 原声说话段 + OCR；finish = 校验稿子 → TTS（肥鱼，成批串行、按内容缓存，laptop 不通回落 macOS say 并在摘要里标降级）→ 按槽位定速，放不下的句子原样退回 agent 缩短（`lines_too_long`）→ 配音轨 → 方案（`Bed.duck_main_db` 压低原声 + 字幕烧录）→ 体检 → render → 预览。
 - `montage_prepare` → `montage_finish`：prepare = `autocut montage` 给拍点槽位 + 镜头中间帧拼图（标签 = 镜头 id）+ ASR 片段；finish = 校验 picks（每个镜头最多一次）→ 替换槽位画面（节拍不变）→ render → 预览。
 - clips：agent 用 `transcript`（分页、句段 ID）和 `clip`（按 ID 建候选，硬约束：时长/不切断话/开头有话/不是半句/不悬空开头/不重叠/不在禁区）选段 → `clips_deliver`（敏感词命中拒绝；render 核验 + 确定性 QA：黑屏/冻结；失败用备选顶上）。被拒后 `ar status` 的 `rejections` 带着被拒区间（`clip --forbid`）和原因码，只补被拒的条数，最多 3 轮；最近 10 条通过率 <50% 自动多备选。
-- `edl_finish`：agent 写 EDL（`segments:[{source,start,end,speed,note}]` + 可选 `lines` 解说），worker 校验（素材在 job 内或 inbox 链接、时间在素材时长内、倍速 0.25–240、≤300 段、成片 ≤ `max_seconds`）后执行；≥8 倍速的段用"只解关键帧"的延时摄影生成中间片段（几十小时的 HEVC 解不起）。大文件用 `ingest {"inbox_link": …}` 符号链接进 job（只读，分析缓存写到 `<root>/_worker/cache`）。
+- `edl_finish`：agent 写 EDL（`segments:[{source,start,end,speed,note}]` + 可选 `lines` 解说），worker 校验（素材在 job 内或 inbox 链接、时间在素材时长内、倍速 0.25–4（普通变速）或 8–240（延时摄影，4–8 之间不收）、≤300 段、成片 ≤ `max_seconds`）后执行；≥8 倍速的段用"只解关键帧"的延时摄影生成中间片段（几十小时的 HEVC 解不起）。大文件用 `ingest {"inbox_link": …}` 符号链接进 job（只读，分析缓存写到 `<root>/_worker/cache`）。
 - 其它：`POST /v1/jobs/<job>/frame {source,t,width}` 取单帧。
 所有流水线在"等 agent"或"等用户确认"时结束，并向 DSH 发 `autocut.needs_agent` / `autocut.ready`（失败 `autocut.failed`）事件（事件发射器默认可关：secrets 里不放 token 就不发）。
 

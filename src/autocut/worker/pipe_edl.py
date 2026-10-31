@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 MAX_SEGMENTS = 300
 SPEED_MIN, SPEED_MAX = 0.25, 240.0
 TIMELAPSE_FROM = 8.0
+PLAN_SPEED_MAX = 4.0  # plan.Segment 的倍速上限
 OUT_FPS = 30
 
 
@@ -81,6 +82,8 @@ def validate_edl(ctx: Ctx, edl: dict[str, Any]) -> list[dict[str, Any]]:
             bad.append(f"#{i + 1} 时间范围 {a:.1f}–{b:.1f} 不在素材 {src}（{d:.1f}s）内")
         if not (SPEED_MIN <= sp <= SPEED_MAX):
             bad.append(f"#{i + 1} 倍速 {sp} 不在 {SPEED_MIN}–{SPEED_MAX}")
+        elif PLAN_SPEED_MAX < sp < TIMELAPSE_FROM:  # 方案文件只收 ≤4 的普通变速，≥8 走关键帧延时；中间这一档两边都不收，提交时就说清楚
+            bad.append(f"#{i + 1} 倍速 {sp:g} 落在空档：普通变速最大 {PLAN_SPEED_MAX:g}，延时摄影从 {TIMELAPSE_FROM:g} 起；改成 ≤{PLAN_SPEED_MAX:g}（缩短素材区间）或 ≥{TIMELAPSE_FROM:g}")
         total += (b - a) / sp if sp else 0
         out.append({"source": src, "start": a, "end": min(b, d), "speed": sp, "note": str(s.get("note", ""))[:80]})
     if bad:

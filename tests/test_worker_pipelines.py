@@ -396,7 +396,7 @@ def test_edl_validation_treats_agent_output_as_untrusted(app: App, media: Path) 
     job = _edl_job(app, media)
     seg = {"source": "src/vod.mp4", "start": 0, "end": 10}
     cases = [({"segments": []}, "bad_edl"), ({"segments": [{**seg, "end": 99999}]}, "bad_edl"), ({"segments": [{**seg, "source": "/etc/passwd"}]}, "bad_edl"),
-             ({"segments": [{**seg, "speed": 1000}]}, "bad_edl"), ({"segments": [{"source": "src/vod.mp4", "start": 5, "end": 3}]}, "bad_edl"), ({"segments": [seg] * 301}, "too_many_segments"),
+             ({"segments": [{**seg, "speed": 1000}]}, "bad_edl"), ({"segments": [{**seg, "speed": 6}]}, "bad_edl"), ({"segments": [{"source": "src/vod.mp4", "start": 5, "end": 3}]}, "bad_edl"), ({"segments": [seg] * 301}, "too_many_segments"),
              ({"segments": [{**seg, "end": 100}], "title": "x"}, "bad_length"), ("坏{", "bad_edl")]
     for edl, code in cases:
         r = wait(app, job, start(app, job, "edl_finish", {"edl": edl, "max_seconds": 60}, lambda c: pipe_edl.run_finish(c))["id"], 60)
