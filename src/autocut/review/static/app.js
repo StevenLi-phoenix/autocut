@@ -3,9 +3,11 @@
 
 import { api, ApiError } from "./api.js";
 import {
-  PACE_LEVELS, UndoStack, boundaryRange, cropRect, diffCount, fmtTime, isCandidateMode, isDecision, isUncertain,
-  keptSegments, moveBoundary, moveBoundaryClamped, normalizePlan, outputDuration, paceId, planStats, reframeCenter,
-  setAction, setLocked, setSelected, trimOutput, REASONS, round4,
+  PACE_LEVELS, UndoStack, applyChanges, boundaryRange, captionLabel, captionMode, checkActions, clone, confirmSegment, cropRect,
+  describeConflictSide, describeFields, diffCount, diffPlans, fmtTime, isCandidateMode, isDecision, isUncertain, keepMoreLess,
+  keptSegments, mergePlans, moveBoundary, moveBoundaryClamped, normalizePlan, normalizeReport, outputDuration, paceId, planStats,
+  reframeCenter, resolveConflict, ensureReframe, setAction, setCaptionMode, setLocked, setOutputSize, setSelected, sizeForPreset, sizePresetOf,
+  spotCheckOrder, trimOutput, findCue, REASONS, round4,
 } from "./model.js";
 import { PlanPlayer } from "./player.js";
 import { Timeline } from "./timeline.js";
@@ -25,7 +27,11 @@ const FORMAT_LABEL = {
 
 // ---------------------------------------------------------------- 状态
 const state = {
-  plan: null, base: null, meta: null, revision: 0, etag: "",
+  plan: null, base: null, synced: null, meta: null, revision: 0, etag: "",
+  marks: { label: "", segs: new Map(), outputs: new Map(), removed: [] }, // agent / 节奏改过的行：{key: 说明}
+  conflictSegs: new Set(), // 待选冲突涉及的片段（"输出:片段"）
+  spot: null, seen: new Set(), // 抽查：{order, i}；看过的片段
+  renderOpts: { loudnorm: null }, cues: {}, drawer: null, baseMap: new Map(), uncertainStart: 0,
   mode: "timeline", outputId: null, selSeg: null, edge: "start",
   filter: { kind: "all", reason: null },
   playMode: "plan", follow: true, previewAll: false,
@@ -60,11 +66,13 @@ async function boot() {
   state.outputId = state.mode === "candidates"
     ? (rankedOutputs().find((o) => o.selected) ?? rankedOutputs()[0]).id
     : state.plan.outputs[0].id;
+  state.uncertainStart = uncertainCount();
   document.title = `${basename(state.plan.sources[mainSource()]?.path) || state.meta.name} · autocut 审阅`;
   $app.dataset.mode = state.mode;
   mountMain();
   bindChrome();
   refreshHeader();
+  renderHints();
   setupBanners();
   await loadOutput({ first: true });
   setInterval(pollExternal, 2500);
@@ -73,6 +81,7 @@ async function boot() {
 function adoptServerPlan(data) {
   state.plan = normalizePlan(data.plan);
   state.base = normalizePlan(data.plan);
+  state.synced = clone(state.plan);
   state.revision = data.revision;
   state.etag = data.etag;
   state.meta = { sources: data.sources, name: data.name, path: data.path, capabilities: data.capabilities, formats: data.formats, summary: data.summary };
@@ -102,7 +111,14 @@ function mountMain() {
   });
   transcript = new Transcript({
     list: $("#rows"), scroller: $("#doc-scroll"),
-    handlers: { onSelect: (id, o) => selectSeg(id, { seek: o.seek, focus: true }), onAction: rowAction, onWord: (id, t) => player.seekSource(selectedSeg()?.source ?? mainSource(), t) },
+    handlers: {
+      onSelect: (id, o) => selectSeg(id, { seek: o.seek, focus: true }), onAction: rowAction, onWord: (id, t) => player.seekSource(selectedSeg()?.source ?? mainSource(), t),
+      baseSeg: (id) => state.baseMap.get(id),
+      mark: (id) => state.marks.segs.get(`${state.outputId}:${id}`) ?? null,
+      conflict: (id) => state.conflictSegs.has(`${state.outputId}:${id}`),
+      seen: (id) => state.seen.has(`${state.outputId}:${id}`),
+      candidate: () => candidateMode(),
+    },
   });
   $("#doc-scroll").addEventListener("wheel", stopFollow, { passive: true });
   $("#doc-scroll").addEventListener("touchmove", stopFollow, { passive: true });
@@ -124,6 +140,7 @@ async function loadOutput({ first = false } = {}) {
   const o = out();
   const src = mainSource(o);
   const hasText = o.segments.some((s) => s.text);
+  rebuildBaseMap();
   transcript.build(o, { sources: sources(), words: state.words, hasText });
   $("#rows").classList.toggle("no-transcript", !hasText);
   $("#no-text-note").hidden = hasText;
@@ -133,6 +150,9 @@ async function loadOutput({ first = false } = {}) {
   player.setOutput(o, sources());
   updateFilterCounts();
   refreshHeader();
+  renderMarksBar();
+  renderSpotBar();
+  loadCues();
 
   const info = sources()[src];
   const msg = $("#player-msg");
@@ -158,6 +178,11 @@ async function loadOutput({ first = false } = {}) {
     if (first) selectSeg(first.id, { seek: false, scroll: false });
   }
   syncPlayModeButtons();
+}
+
+function rebuildBaseMap() {
+  const bo = state.base.outputs.find((o) => o.id === out().id);
+  state.baseMap = new Map((bo?.segments ?? []).map((s) => [s.id, s]));
 }
 
 function ensurePeaks(sid) {
@@ -211,22 +236,47 @@ function refreshHeader() {
     $("#render-label").textContent = "出片";
     $("#render-btn").disabled = !state.meta.capabilities.render;
   }
-  $("#render-btn").title = state.meta.capabilities.render ? "" : "出片模块还没装好，暂时不能出片（审阅和保存不受影响）";
+  const missing = Object.values(sources()).filter((x) => x.kind !== "image" && !x.exists);
+  const why = (ok, missingMsg, off) => (missing.length ? missingMsg : ok ? "" : off);
+  const gone = "找不到素材文件：先在页面上方“重新定位”素材";
+  $("#render-btn").disabled = $("#render-btn").disabled || missing.length > 0;
+  $("#render-btn").title = why(state.meta.capabilities.render, gone, "出片模块还没装好，暂时不能出片（审阅和保存不受影响）");
   const unc = uncertainCount();
   const ub = $("#uncertain-btn");
-  ub.hidden = unc === 0;
-  fill(ub, GLYPH.warn, ` ${unc} 处拿不准`);
-  ub.setAttribute("aria-label", `${unc} 处拿不准，点击跳到第一处`);
+  const spotN = candidateMode() ? 0 : spotCheckOrder(o).length;
+  ub.hidden = unc === 0 && spotN === 0;
+  ub.classList.toggle("btn-warn", unc > 0);
+  if (unc > 0) {
+    fill(ub, GLYPH.warn, ` ${unc} 处拿不准`);
+    ub.setAttribute("aria-label", `${unc} 处拿不准，点击跳到第一处`);
+    ub.title = "";
+  } else {
+    fill(ub, GLYPH.check, " 没有拿不准的 · 抽查 ▸");
+    ub.setAttribute("aria-label", "没有拿不准的地方；点击开始抽查，按把握度从低到高看");
+    ub.title = "没有拿不准，不等于都对：按把握度从低到高抽查（⇧J 下一处）";
+  }
   $("#cand-auth").hidden = !candidateMode();
-  $("#check-btn").disabled = !state.meta.capabilities.check;
-  $("#check-btn").title = state.meta.capabilities.check ? "" : "体检模块还没装好";
-  $("#export-btn").disabled = !state.meta.capabilities.export;
-  $("#export-btn").title = state.meta.capabilities.export ? "" : "导出模块还没装好";
+  $("#check-btn").disabled = !state.meta.capabilities.check || missing.length > 0;
+  $("#check-btn").title = why(state.meta.capabilities.check, gone, "体检模块还没装好");
+  $("#export-btn").disabled = !state.meta.capabilities.export || missing.length > 0;
+  $("#export-btn").title = why(state.meta.capabilities.export, gone, "导出模块还没装好");
+  $("#redo-btn").disabled = !state.undo.canRedo;
+  refreshCaptionUI();
   refreshSaveState();
   refreshPace();
 }
 
 const candidateMode = () => state.mode === "candidates";
+
+/** 底栏快捷键提示：按模式给（候选清单里真正常用的是 ↑↓ 和 S）。J = 下一个，K = 上一个，和实际行为一致。 */
+function renderHints() {
+  const k = (...keys) => h("kbd", {}, ...keys);
+  const items = candidateMode()
+    ? [[k("空格"), " 播放/暂停"], [k("↑"), "/", k("↓"), " 上/下一个候选"], [k("S"), " 勾选/取消"], [k("J"), "/", k("K"), " 下/上一个决定"], [k("X"), " 剪/留"], [k("["), k("]"), " 微调边界（", k("⇧"), " 为 500ms）"], [k(MOD + "Z"), " 撤销"], [k("?"), " 全部快捷键"]]
+    : [[k("空格"), " 播放/暂停"], [k("J"), "/", k("K"), " 下/上一个决定"], [k("⇧J"), "/", k("⇧K"), " 只在拿不准之间跳"], [k("X"), " 剪/留切换"], [k("L"), " 锁定"], [k("["), k("]"), " 微调边界 50ms（", k("⇧"), " 500ms）"], [k("A"), " 看 agent 改了什么"], [k(MOD + "Z"), " 撤销"], [k("?"), " 全部快捷键"]];
+  fill($("#hints"), ...items.map((n) => h("span", {}, ...n)), h("span", { class: "tb-spacer" }), h("span", { id: "footer-save", class: "muted" }));
+  $("#footer-save").textContent = `自动保存到 ${state.meta.name}`;
+}
 
 function uncertainCount() {
   return candidateMode()
@@ -245,8 +295,8 @@ function refreshSaveState() {
   const [cls, text] = map[state.save.status] ?? map.idle;
   el.className = `save-state ${cls}`;
   el.textContent = text;
-  $("#footer-save").textContent = `自动保存到 ${state.meta.name}`;
   $("#undo-btn").disabled = !state.undo.canUndo;
+  $("#redo-btn").disabled = !state.undo.canRedo;
 }
 
 function refreshPace() {
@@ -256,7 +306,7 @@ function refreshPace() {
   if (pace == null) return;
   const cur = paceId(pace);
   const keep = state.plan.options?.keep_pause;
-  wrap.title = keep != null ? `每个停顿保留 ${keep}s。改节奏要重新生成方案。` : "改节奏要重新生成方案";
+  wrap.title = `${keep != null ? `现在每个停顿保留 ${keep}s。` : ""}点另一档会在页面里重新划分停顿；你手改过或锁定的片段不会动。`;
   for (const b of $$("[data-pace]", wrap)) {
     const on = b.dataset.pace === cur;
     b.setAttribute("aria-checked", String(on));
@@ -286,11 +336,14 @@ function setupBanners() {
   const introKey = "autocut.review.intro.v1";
   if (!store.getItem(introKey)) {
     const nU = uncertainCount();
+    const cutsRecipe = state.plan.outputs.some((o) => o.segments.some((s) => s.action === "cut"));
     setBanner("intro", {
       kind: "tip",
       body: candidateMode()
         ? "候选按分数从高到低排好了；勾选要出片的，右边写着为什么入选。满意就点“出片”。"
-        : `${GLYPH.cut} 是建议剪掉的地方。${nU ? `按 ⇧J 逐个看拿不准的 ${nU} 处；` : ""}满意就点“出片”。`,
+        : cutsRecipe
+          ? `${GLYPH.cut} 是建议剪掉的地方。${nU ? `按 ⇧J 逐个看拿不准的 ${nU} 处；` : "没有拿不准的地方，不等于都对：点“抽查”按把握度从低到高看；"}满意就点“出片”。把鼠标移到一行上能看到“剪掉 / 多留 / 试听”。`
+          : "这是机器排好的第一版材料：每一段都可以试听、改边界；要重新编排，用“导出工程”到剪辑软件里继续。",
       actions: [{ label: "知道了", onclick: () => { store.setItem(introKey, "1"); clearBanner("intro"); } }],
       dismiss: () => store.setItem(introKey, "1"),
     });
@@ -302,13 +355,15 @@ function setupBanners() {
   }
 }
 
+let notesExpanded = false;
 function showNotes() {
   const notes = state.plan.notes ?? [];
   if (!notes.length || state.dismissedNotes) return clearBanner("notes");
-  const show = notes.length > 3 ? notes.slice(0, 3) : notes;
+  const show = notesExpanded || notes.length <= 2 ? notes : notes.slice(0, 2);
   setBanner("notes", {
     kind: "warn", title: "方案备注",
-    body: h("span", {}, ...show.flatMap((n, i) => [i ? h("br") : null, n]), notes.length > 3 ? h("span", { class: "muted" }, `（另外 ${notes.length - 3} 条见方案文件的 notes）`) : null),
+    body: h("span", {}, ...show.flatMap((n, i) => [i ? h("br") : null, n])),
+    actions: notes.length > 2 ? [{ label: notesExpanded ? "收起" : `展开全部（${notes.length} 条）`, onclick: () => { notesExpanded = !notesExpanded; showNotes(); } }] : [],
     dismiss: () => { state.dismissedNotes = true; },
   });
 }
@@ -360,6 +415,10 @@ function selectSeg(segId, { seek = true, scroll = true, focus = false, edge = nu
 function clearSelection() { /* 点在空白处：保留当前选中，只移动播放头 */ }
 
 function stepDecision(dir, uncertainOnly = false) {
+  if (uncertainOnly && !candidateMode() && uncertainCount() === 0) { // 没有拿不准：⇧J/⇧K 改成按把握度抽查
+    if (!state.spot) startSpotCheck(); else stepSpot(dir);
+    return;
+  }
   const segs = out().segments;
   const cur = segs.findIndex((s) => s.id === state.selSeg);
   const ok = (s) => (uncertainOnly ? isUncertain(s) : isDecision(s)) && transcript.isVisible(s.id);
@@ -372,7 +431,51 @@ function stepDecision(dir, uncertainOnly = false) {
     : `已经是${dir > 0 ? "最后" : "第"}一个决定`, { timeout: 2200 });
 }
 
+// ---- 抽查：没有"拿不准"时，按把握度从低到高看一遍（"没有拿不准"不等于"都对"）
+function startSpotCheck() {
+  const order = spotCheckOrder(out());
+  if (!order.length) { toast("没有可以抽查的决定了", { timeout: 2200 }); return; }
+  state.spot = { order, i: -1 };
+  stepSpot(1);
+}
+
+function stepSpot(dir) {
+  const sp = state.spot;
+  if (!sp) return;
+  const next = sp.i + dir;
+  if (next < 0) { toast("已经是抽查的第一处", { timeout: 1800 }); return; }
+  if (next >= sp.order.length) { toast(`抽查完了（共 ${sp.order.length} 处）。没发现问题也不等于都对，出片后再听一遍。`, { timeout: 4500 }); return; }
+  sp.i = next;
+  const id = sp.order[next];
+  state.seen.add(`${state.outputId}:${id}`);
+  selectSeg(id, { seek: true, focus: true });
+  transcript.update(id);
+  renderSpotBar();
+}
+
+function exitSpot() {
+  state.spot = null;
+  renderSpotBar();
+}
+
+function renderSpotBar() {
+  const bar = $("#spot-bar");
+  if (!bar) return;
+  bar.hidden = !state.spot;
+  if (!state.spot) return;
+  const { order, i } = state.spot;
+  const seg = out().segments.find((s) => s.id === order[i]);
+  fill(bar,
+    h("span", { class: "bar-text" }, h("strong", {}, "抽查："), "没有拿不准的地方，不等于都对。按把握度从低到高看，",
+      h("span", { class: "mono" }, ` ${Math.max(i + 1, 0)}/${order.length}`), seg ? `，这一处 ${Math.round(seg.confidence * 100)}%` : ""),
+    h("span", { class: "bar-actions" },
+      h("button", { class: "btn btn-sm", onclick: () => stepSpot(-1) }, "◂ 上一处"),
+      h("button", { class: "btn btn-sm", onclick: () => stepSpot(1) }, "下一处 ▸"),
+      h("button", { class: "btn btn-sm btn-quiet", onclick: exitSpot }, "退出抽查")));
+}
+
 function jumpToFirstUncertain() {
+  if (!candidateMode() && uncertainCount() === 0) { startSpotCheck(); return; }
   if (candidateMode()) {
     const o = rankedOutputs().find((x) => x.selected && x.segments.some(isUncertain)) ?? rankedOutputs().find((x) => x.segments.some(isUncertain));
     if (!o) return;
@@ -394,6 +497,11 @@ function applyEdit(label, changes, opts) {
 function afterChange(changes) {
   state.editSeq++;
   const o = out();
+  if (changes.some((c) => c.op && c.output === o.id)) { // 增删片段、改顺序：整份文字稿重建
+    loadOutput().then(() => { if (candidateMode()) renderCandidateList(); refreshHeader(); });
+    markDirty();
+    return;
+  }
   const touched = new Set(changes.filter((c) => c.seg && c.output === o.id).map((c) => c.seg));
   for (const id of touched) transcript.update(id);
   player.setOutput(o, sources());
@@ -409,9 +517,39 @@ const snippet = (seg) => (seg.text ? `“${seg.text.slice(0, 14)}”` : `${REASO
 function setSegAction(segId, action) {
   const seg = out().segments.find((s) => s.id === segId);
   if (!seg || (seg.action === action && !isUncertain(seg))) return;
+  const wasUncertain = isUncertain(seg);
   const changes = setAction(out(), segId, action);
   applyEdit(`${action === "cut" ? "剪掉" : "保留"} ${snippet(seg)}`, changes);
   announce(`${action === "cut" ? "已剪掉" : "已改回保留"}：${snippet(seg)}`);
+  if (wasUncertain) afterResolved(segId);
+}
+
+/** "就这样"：确认机器的判断，不改动作和边界。 */
+function confirmSeg(segId) {
+  const seg = out().segments.find((s) => s.id === segId);
+  if (!seg) return;
+  const wasUncertain = isUncertain(seg);
+  applyEdit(`确认 ${snippet(seg)}`, confirmSegment(out(), segId));
+  announce(`已确认：${snippet(seg)}`);
+  if (wasUncertain) afterResolved(segId);
+}
+
+/**
+ * 处理完一处"拿不准"之后（#8）：在"拿不准"筛选里，这一行留在视图里（变淡，标"已确认"），
+ * 选中和焦点移到下一处拿不准，键盘用户不会丢掉位置；其它视图里焦点留在这一行。
+ */
+function afterResolved(segId) {
+  if (state.filter.kind === "uncertain") {
+    transcript.pin(segId);
+    transcript.update(segId);
+    const segs = out().segments;
+    const i = segs.findIndex((s) => s.id === segId);
+    const next = segs.slice(i + 1).find((s) => isUncertain(s)) ?? segs.slice(0, i).reverse().find((s) => isUncertain(s));
+    if (next) { selectSeg(next.id, { seek: true, focus: true }); return; }
+    announce("拿不准的都处理完了");
+    toast("拿不准的都处理完了。想再检查，用“抽查”按把握度从低到高看。", { timeout: 4500 });
+  }
+  transcript.rowFor(segId)?.focus({ preventScroll: true });
 }
 
 function toggleSelected() {
@@ -423,16 +561,68 @@ function toggleLock(segId = state.selSeg) {
   const seg = out().segments.find((s) => s.id === segId);
   if (!seg) return;
   applyEdit(seg.locked ? "解锁" : "锁定", setLocked(out(), segId, !seg.locked));
-  announce(seg.locked ? "已锁定" : "已解锁");
+  announce(seg.locked ? "已锁定：改节奏时这一段不会被动" : "已解锁");
 }
 
 function rowAction(segId, act) {
   if (segId !== state.selSeg) selectSeg(segId, { seek: false, scroll: false });
+  const wasUncertain = isUncertain(out().segments.find((s) => s.id === segId) ?? {});
   if (act === "keep" || act === "cut") setSegAction(segId, act);
   else if (act === "toggle") setSegAction(segId, out().segments.find((s) => s.id === segId).action === "cut" ? "keep" : "cut");
   else if (act === "lock") toggleLock(segId);
   else if (act === "audition") auditionSegment(segId);
-  transcript.rowFor(segId)?.focus({ preventScroll: true });
+  else if (act === "confirm") confirmSeg(segId);
+  else if (act === "more" || act === "less") keepMore(segId, act === "more" ? 0.5 : -0.5);
+  else if (act.startsWith("edge:")) {
+    const [, edge, what] = act.split(":");
+    if (what === "audition") auditionEdge(segId, edge);
+    else edgeMoreLess(segId, edge, what === "more" ? 1 : -1, wasUncertain);
+  }
+  // afterResolved 已经把焦点交给下一处时不要再抢回来
+  if (document.activeElement?.closest?.(".row")?.dataset.seg === segId || document.activeElement === document.body) transcript.rowFor(segId)?.focus({ preventScroll: true });
+}
+
+/** 多留 / 少留（秒）：动剪掉片段上和保留部分相接的那条边。 */
+function keepMore(segId, delta) {
+  try {
+    const { changes, edge } = keepMoreLess(out(), sources(), segId, delta);
+    if (!changes.length) { toast("到头了：再移就会碰到相邻片段", { timeout: 2200 }); return; }
+    applyEdit(delta > 0 ? "多留一点" : "少留一点", changes, { key: `more:${segId}` });
+    const seg = out().segments.find((s) => s.id === segId);
+    announce(`${delta > 0 ? "多留" : "少留"} ${Math.abs(delta)} 秒，边界 ${fmtTime(seg[edge], { ms: 2 })}`);
+    if (state.auditionNudge) auditionEdge(segId, edge);
+  } catch (e) { toast(e.message, { kind: "error" }); }
+}
+
+/** 切点拿不准：开头 / 结尾 多留 / 少留 delta 秒（+1 多留，−1 少留）；动过边界就算确认。 */
+function edgeMoreLess(segId, edge, dir, wasUncertain) {
+  const seg = out().segments.find((s) => s.id === segId);
+  if (!seg) return;
+  const sign = edge === "start" ? -dir : dir; // 开头往前、结尾往后 = 多留
+  const { lo, hi } = boundaryRange(out(), sources(), segId, edge);
+  const target = Math.min(Math.max(round4(seg[edge] + sign * 1), lo), hi);
+  const what = `${edge === "start" ? "开头" : "结尾"}${dir > 0 ? "多留" : "少留"} 1s`;
+  if (Math.abs(target - seg[edge]) < 1e-9) { toast("到头了：再移会超出素材范围或吃掉整段", { timeout: 2200 }); return; }
+  const changes = moveBoundary(out(), sources(), segId, edge, target);
+  if (wasUncertain) changes.push(...confirmSegment(out(), segId));
+  applyEdit(what, changes);
+  announce(`${what}，${edge === "start" ? "开头" : "结尾"}改到 ${fmtTime(target, { ms: 1 })}`);
+  fitCandidateTimelineIfNeeded();
+  auditionEdge(segId, edge);
+  if (wasUncertain) afterResolved(segId);
+}
+
+function fitCandidateTimelineIfNeeded() {
+  if (candidateMode()) { renderWhy(); fitCandidateTimeline(out()); }
+}
+
+/** 试听某一条边附近：开头听进入的地方，结尾听收住的地方。 */
+function auditionEdge(segId, edge) {
+  const seg = out().segments.find((s) => s.id === segId);
+  if (!seg) return;
+  const t = seg[edge];
+  player.auditionRange(seg.source, edge === "start" ? t - 0.8 : t - 2.2, edge === "start" ? t + 2.2 : t + 0.8);
+  announce(`试听${edge === "start" ? "开头" : "结尾"}切点附近`);
 }
 
 function auditionSegment(segId = state.selSeg) {
@@ -484,8 +674,9 @@ function onTimelineDrag({ segId, edge, t, phase }) {
 function undo(redo = false) {
   const e = redo ? state.undo.redo(state.plan) : state.undo.undo(state.plan);
   if (!e) { toast(redo ? "没有可重做的操作" : "没有可撤销的操作", { timeout: 1800 }); return; }
+  if (e.meta?.base) { applyChanges(state.base, e.changes, redo ? "after" : "before"); rebuildBaseMap(); } // 节奏调整不算“我改的”
   const changes = e.changes;
-  const outId = changes[0].output;
+  const outId = changes.find((c) => c.output !== null)?.output ?? state.outputId; // 方案级的改动（options）不属于某个输出
   if (outId !== state.outputId) { switchOutput(outId).then(() => afterChange(changes)); }
   else {
     afterChange(changes);
@@ -513,14 +704,17 @@ async function save() {
   state.save.status = "saving";
   refreshSaveState();
   const seq = state.editSeq;
+  const sent = clone(state.plan);
   try {
-    const r = await api.save(state.revision, state.etag, state.plan);
+    const r = await api.save(state.revision, state.etag, sent);
     state.revision = r.revision;
     state.etag = r.etag;
+    state.synced = sent; // 和服务器同步过的版本：之后三方合并的"共同祖先"
     state.meta.summary = r.summary;
     if (state.editSeq === seq) { state.dirty = false; state.save.status = "saved"; } else { state.save.status = "dirty"; autosave(); }
+    loadCuesSoon();
   } catch (e) {
-    if (e.status === 409) enterConflict(e.body.disk);
+    if (e.status === 409) { await absorbDisk(e.body.disk); }
     else if (e.status === 400) {
       state.save.status = "error";
       setBanner("save-error", { kind: "error", title: "方案没能保存：", body: h("span", { class: "pre" }, e.message), actions: [{ label: "撤销上一步", onclick: () => { undo(); clearBanner("save-error"); } }], dismiss: false });
@@ -538,54 +732,141 @@ async function save() {
 async function flushSave() {
   autosave.cancel();
   for (let i = 0; i < 20 && (state.dirty || state.saving); i++) {
-    if (state.conflict || state.save.status === "error") throw new Error("方案还没保存成功，先处理页面上方的提示");
+    if (state.conflict) throw new Error("有改动和 agent 的修改冲突，先在右侧“方案冲突”面板里逐条选一边");
+    if (state.save.status === "error") throw new Error("方案还没保存成功，先处理页面上方的提示");
     if (!state.saving) await save();
     else await new Promise((r) => setTimeout(r, 50));
   }
 }
 
-function enterConflict(disk) {
-  state.conflict = disk;
-  state.save.status = "conflict";
-  const n = diffCount(state.base, normalizePlan(disk.plan));
-  setBanner("conflict", {
-    kind: "error", title: `方案在外部被修改了${n ? `（${n} 处）` : ""}`,
-    body: "agent 或编辑器改了这份方案文件。你的改动还没有保存，选一个版本继续：",
-    actions: [
-      { label: "载入新版本", onclick: () => resolveConflict("theirs") },
-      { label: "保留我的版本", onclick: () => resolveConflict("mine") },
-    ], dismiss: false,
-  });
-}
-
-async function resolveConflict(which) {
-  const disk = state.conflict;
-  if (!disk) return;
-  state.conflict = null;
-  clearBanner("conflict");
-  if (which === "mine") {
-    state.revision = disk.revision; state.etag = disk.etag;
-    state.save.status = "dirty";
-    save();
-    toast("已用你的版本覆盖磁盘上的方案", { timeout: 3000 });
+// ---- 外部修改：标出改了哪里、保留撤销历史、按片段合并（#4 #5）
+/**
+ * 磁盘上的方案变了（agent、编辑器，或者保存时返回 409）。
+ * - 我没有未保存的改动：把 agent 的改动逐处套到当前方案上，记成一条可撤销的历史（⌘Z 就是拒绝 agent 的改动），撤销栈保留；
+ * - 我有未保存的改动：按片段三方合并（共同祖先 = 上次同步的版本）。不冲突的自动合并，真冲突的先保留我的值，
+ *   在右侧面板里逐条选；选完之前不保存，期间我的编辑一律保留。
+ * 两种情况都会把 agent 改过的行标出来，可以筛选、逐处跳转。
+ */
+async function absorbDisk(data) {
+  const theirs = normalizePlan(data.plan);
+  const prev = state.synced;
+  const theirsDiff = diffPlans(prev, theirs);
+  const hadLocal = state.dirty || !!state.conflict;
+  applyChanges(state.base, theirsDiff.changes); // base 跟着走：“改动 N 处”“已改”只反映我自己的修改
+  let conflicts = [];
+  let merged = 0;
+  if (!hadLocal) {
+    const d = diffPlans(state.plan, theirs);
+    if (d.changes.length) {
+      applyChanges(state.plan, d.changes);
+      state.undo.push(`agent 的改动（${theirsDiff.items.length} 处）`, d.changes);
+    }
   } else {
-    await reloadFrom(disk);
-    toast("已载入新版本，你没保存的改动被丢弃了", { timeout: 3500 });
+    const r = mergePlans(prev, state.plan, theirs);
+    const d = diffPlans(state.plan, r.plan);
+    if (d.changes.length) {
+      applyChanges(state.plan, d.changes);
+      state.undo.push("合并 agent 的改动", d.changes);
+    }
+    conflicts = r.conflicts;
+    merged = r.applied;
   }
-}
-
-async function reloadFrom(data) {
-  const keepSeg = state.selSeg, keepOut = state.outputId;
-  adoptServerPlan(data);
-  state.undo.clear();
-  state.dirty = false;
-  state.save.status = "saved";
-  state.outputId = state.plan.outputs.some((o) => o.id === keepOut) ? keepOut : state.plan.outputs[0].id;
-  state.selSeg = keepSeg;
+  state.revision = data.revision;
+  state.etag = data.etag;
+  state.synced = theirs;
+  state.meta.sources = data.sources;
+  state.meta.summary = data.summary;
+  state.outputId = state.plan.outputs.some((o) => o.id === state.outputId) ? state.outputId : state.plan.outputs[0].id;
+  if (theirsDiff.items.length) setMarks(theirsDiff.items, "agent 改过");
   showNotes();
   await loadOutput();
   if (candidateMode()) renderCandidateList();
+  const n = theirsDiff.items.filter((x) => x.output !== null).length;
+  if (conflicts.length) {
+    state.conflict = { groups: conflicts };
+    state.dirty = true;
+    state.save.status = "conflict";
+    state.conflictSegs = conflictSegSet(conflicts);
+    transcript.updateAll();
+    setBanner("conflict", {
+      kind: "error", title: "方案在外部被修改了：",
+      body: `agent 改了 ${n} 处${merged ? `，其中 ${merged} 处已经合并进来` : ""}；有 ${conflicts.length} 处和你改的是同一个地方，需要你选一边。你的改动都还在，选完之前不会保存。`,
+      actions: [{ label: "逐条处理", onclick: () => { openDrawer("conflict"); renderConflictPanel(); } }], dismiss: false,
+    });
+    openDrawer("conflict");
+    renderConflictPanel();
+  } else if (hadLocal) {
+    markDirty();
+    toast(`已把 agent 的 ${n} 处改动合并进来，你的改动也都保留了`, { timeout: 5000 });
+  } else if (n) {
+    toast(`agent 改了 ${n} 处，已载入并标出（⌘Z 可以拒绝）`, { timeout: 6000 });
+  }
   refreshHeader();
+}
+
+function conflictSegSet(groups) {
+  return new Set(groups.flatMap((g) => g.segIds.map((id) => `${g.output}:${id}`)));
+}
+
+// 冲突面板（右侧抽屉）
+function renderConflictPanel() {
+  const c = state.conflict;
+  const body = $("#drawer-body");
+  if (!c) { fill(body, h("p", {}, "没有待处理的冲突。")); return; }
+  const snip = (g) => {
+    const seg = state.plan.outputs.find((o) => o.id === g.output)?.segments.find((s) => s.id === g.segIds[0]);
+    if (!g.segIds.length) return `输出「${g.output}」的设置`;
+    return seg ? `${seg.text ? "“" + seg.text.slice(0, 18) + "”" : (REASONS[seg.reason] ?? seg.reason)} · ${fmtTime(seg.start, { ms: 1 })}` : g.segIds.join("、");
+  };
+  fill(body,
+    h("p", {}, h("strong", {}, `${c.groups.length} 处冲突`), "：agent 和你改了同一个地方。你的改动先保留着，没有丢；逐条选一边。选完之前不会保存，也可以先去改别的地方。"),
+    h("div", { class: "conflict-bulk" },
+      h("button", { class: "btn btn-sm", onclick: () => resolveAll("mine") }, "全部用我的"),
+      h("button", { class: "btn btn-sm", onclick: () => resolveAll("theirs") }, "全部用 agent 的")),
+    h("ol", { class: "conflict-list" }, ...c.groups.map((g) => h("li", { class: "conflict-card" },
+      h("div", { class: "conflict-head" }, h("strong", {}, snip(g)),
+        g.segIds.length ? h("button", { class: "btn btn-sm btn-quiet", onclick: () => selectSeg(g.segIds[0], { focus: true }) }, "跳到这里") : null),
+      h("div", { class: "conflict-sides" },
+        h("div", {}, h("span", { class: "lbl" }, "你"), describeConflictSide(g, "mine")),
+        h("div", {}, h("span", { class: "lbl lbl-agent" }, "agent"), describeConflictSide(g, "theirs"))),
+      h("div", { class: "conflict-actions" },
+        h("button", { class: "btn btn-sm", onclick: () => resolveGroup(g.key, "mine") }, "用我的"),
+        h("button", { class: "btn btn-sm", onclick: () => resolveGroup(g.key, "theirs") }, "用 agent 的"))))));
+}
+
+function resolveGroup(key, side, { quiet = false } = {}) {
+  const c = state.conflict;
+  const g = c?.groups.find((x) => x.key === key);
+  if (!g) return;
+  const changes = resolveConflict(state.plan, g, side);
+  c.groups = c.groups.filter((x) => x !== g);
+  state.conflictSegs = conflictSegSet(c.groups);
+  if (changes.length) {
+    state.undo.push(side === "theirs" ? "采用 agent 的版本" : "保留我的版本", changes);
+    afterChange(changes);
+  }
+  for (const id of g.segIds) transcript.update(id);
+  if (!quiet) finishConflictIfDone();
+}
+
+function resolveAll(side) {
+  const c = state.conflict;
+  if (!c) return;
+  for (const g of [...c.groups]) resolveGroup(g.key, side, { quiet: true });
+  finishConflictIfDone();
+}
+
+function finishConflictIfDone() {
+  const c = state.conflict;
+  if (!c) return;
+  if (c.groups.length) { renderConflictPanel(); refreshSaveState(); return; }
+  state.conflict = null;
+  state.conflictSegs = new Set();
+  state.save.status = "dirty";
+  clearBanner("conflict");
+  closeDrawer({ focus: false });
+  markDirty();
+  toast("冲突都处理完了，正在保存合并后的方案", { kind: "ok", timeout: 3500 });
 }
 
 async function pollExternal() {
@@ -593,13 +874,69 @@ async function pollExternal() {
   let s;
   try { s = await api.status(); } catch { return; }
   if (s.revision === state.revision && s.etag === state.etag) return;
-  if (state.saving) return;
+  if (state.saving || state.conflict) return;
   let data;
   try { data = await api.plan(); } catch { return; }
-  if (state.dirty) { enterConflict(data); return; }
-  const n = diffCount(state.base, normalizePlan(data.plan));
-  await reloadFrom(data);
-  toast(`方案在外部被修改了${n ? `（${n} 处）` : ""}，已载入新版本`, { timeout: 5000 });
+  await absorbDisk(data);
+}
+
+// ---- 被标出的改动（agent / 节奏）
+const markKey = (o, s) => `${o}:${s}`;
+const markedIds = () => out().segments.filter((s) => state.marks.segs.has(markKey(state.outputId, s.id))).map((s) => s.id);
+
+function setMarks(items, label) {
+  const old = new Set(state.marks.segs.keys());
+  const marks = { label, segs: new Map(), outputs: new Map(), removed: [] };
+  for (const it of items) {
+    if (it.output === null) continue;
+    if (it.seg === null) { marks.outputs.set(it.output, `${label}：${describeFields(it.fields)}`); continue; }
+    if (it.op === "remove") { marks.removed.push({ output: it.output, seg: it.seg, text: it.data?.text || `${REASONS[it.data?.reason] ?? ""} ${fmtTime(it.data?.start ?? 0, { ms: 1 })}` }); continue; }
+    if (it.op === "insert") { marks.segs.set(markKey(it.output, it.seg), `${label}：新增`); continue; }
+    // 节奏调整一定会顺带改说明、把握度，只看动作和边界；agent 的改动则什么字段都算
+    const quiet = label.startsWith("节奏") ? ["evidence", "confidence", "detail", "reason", "text"] : ["evidence", "confidence"];
+    const fields = Object.fromEntries(Object.entries(it.fields).filter(([k]) => !quiet.includes(k)));
+    if (!Object.keys(fields).length) continue;
+    marks.segs.set(markKey(it.output, it.seg), `${label}：${describeFields(fields)}`);
+  }
+  state.marks = marks;
+  if (transcript?.output) for (const k of new Set([...old, ...marks.segs.keys()])) { const [o, id] = [k.slice(0, k.indexOf(":")), k.slice(k.indexOf(":") + 1)]; if (o === state.outputId) transcript.update(id); }
+  renderMarksBar();
+  if (candidateMode()) renderCandidateList();
+  updateFilterCounts();
+}
+
+function clearMarks() {
+  if (state.filter.kind === "marked") setFilter({ kind: "all", reason: null });
+  setMarks([], "");
+}
+
+function renderMarksBar() {
+  const bar = $("#marks-bar");
+  if (!bar) return;
+  const ids = markedIds();
+  const nRem = state.marks.removed.length;
+  bar.hidden = !(ids.length || nRem || state.marks.outputs.size);
+  if (bar.hidden) return;
+  const label = state.marks.label || "改过";
+  fill(bar,
+    h("span", { class: "bar-text" }, h("strong", {}, `${label}：${ids.length} 处`),
+      nRem ? `，删除了 ${nRem} 个片段（${state.marks.removed.slice(0, 2).map((r) => r.text.slice(0, 10)).join("、")}${nRem > 2 ? "…" : ""}）` : "",
+      state.marks.outputs.size ? `，${[...state.marks.outputs.values()].join("；")}` : ""),
+    h("span", { class: "bar-actions" },
+      ids.length ? h("button", { class: "btn btn-sm", onclick: () => stepMark(-1) }, "◂ 上一处") : null,
+      ids.length ? h("button", { class: "btn btn-sm", onclick: () => stepMark(1) }, "下一处 ▸") : null,
+      ids.length ? h("button", { class: "btn btn-sm", "aria-pressed": String(state.filter.kind === "marked"), onclick: () => setFilter(state.filter.kind === "marked" ? { kind: "all", reason: null } : { kind: "marked", reason: null }) }, "只看这些") : null,
+      h("button", { class: "btn btn-sm btn-quiet", onclick: clearMarks }, "知道了")));
+}
+
+function stepMark(dir) {
+  const ids = markedIds();
+  if (!ids.length) return;
+  const segs = out().segments.map((s) => s.id);
+  const cur = segs.indexOf(state.selSeg);
+  const order = ids.map((id) => segs.indexOf(id));
+  const next = dir > 0 ? order.find((i) => i > cur) ?? order[0] : [...order].reverse().find((i) => i < cur) ?? order[order.length - 1];
+  selectSeg(segs[next], { seek: true, focus: true });
 }
 
 // ---------------------------------------------------------------- 播放
@@ -657,6 +994,7 @@ function onTick(s) {
     scrub.setAttribute("aria-valuetext", `成片 ${fmtTime(s.outTime ?? 0)}，共 ${fmtTime(s.outDuration)}；原片 ${fmtTime(s.srcTime)}`);
   }
   void inCut;
+  updateCaption(s.outTime);
   if (candidateMode()) updateFrameCrop(s.outTime ?? 0);
 }
 
@@ -731,6 +1069,7 @@ function setFilter(f) {
   state.filter = f;
   transcript.applyFilter(f);
   updateFilterCounts();
+  renderMarksBar();
   const n = out().segments.filter((s) => transcript.isVisible(s.id)).length;
   announce(`筛选后显示 ${n} 条`);
   const sel = transcript.rowFor(state.selSeg);
@@ -741,12 +1080,16 @@ function updateFilterCounts() {
   const bar = $("#filter-bar");
   if (!bar) return;
   const segs = out().segments;
-  const counts = { all: segs.length, uncertain: segs.filter(isUncertain).length, cut: segs.filter((s) => s.action === "cut").length, keep: segs.filter((s) => s.action === "keep").length };
+  const nMarked = markedIds().length + segs.filter((s) => state.conflictSegs.has(markKey(state.outputId, s.id))).length;
+  const counts = { all: segs.length, uncertain: segs.filter(isUncertain).length, cut: segs.filter((s) => s.action === "cut").length, keep: segs.filter((s) => s.action === "keep").length, marked: nMarked };
+  const resolved = Math.max(0, state.uncertainStart - counts.uncertain);
   for (const b of $$("[data-filter]", bar)) {
     const on = b.dataset.filter === state.filter.kind && !state.filter.reason;
     b.setAttribute("aria-checked", String(on));
     b.tabIndex = on ? 0 : -1;
-    b.querySelector(".count").textContent = String(counts[b.dataset.filter]);
+    b.hidden = b.dataset.filter === "marked" && nMarked === 0 && !on;
+    const label = b.querySelector(".count");
+    label.textContent = b.dataset.filter === "uncertain" && resolved > 0 ? `${counts.uncertain} · 已处理 ${resolved}` : String(counts[b.dataset.filter]);
   }
   // 按理由统计被剪掉的（同时也是筛选器）
   const byReason = {};
@@ -809,6 +1152,7 @@ function renderCandidateList() {
         h("span", { class: "cand-sub" },
           !o.selected && h("span", { class: "tag tag-skip" }, "没选"),
           unc > 0 && h("span", { class: "tag tag-warn" }, GLYPH.warn, ` ${unc} 处拿不准`),
+          (state.marks.outputs.has(o.id) || [...state.marks.segs.keys()].some((k) => k.startsWith(`${o.id}:`))) && h("span", { class: "tag tag-agent" }, state.marks.label || "改过"),
           reason)),
     );
   }));
@@ -824,7 +1168,7 @@ function renderWhy() {
   fill(box, 
     h("h2", { class: "why-title" }, o.title || o.id),
     h("p", { class: "why-meta mono" }, o.score != null ? `${o.score} 分 · ` : "", `${fmtTime(outputDuration(o))} 长`, !o.selected ? " · 没选" : ""),
-    h("h3", {}, "为什么入选"),
+    h("h3", {}, o.selected ? "为什么入选" : "为什么没选"),
     o.reasons.length ? h("ul", { class: "why-list" }, ...o.reasons.map((r) => h("li", {}, r))) : h("p", { class: "muted" }, "方案没有给出理由。"),
     first && h("p", { class: "why-edge" }, h("strong", {}, "开头："), first.detail ? ` ${first.detail}` : first.reason === "lead_in" ? ` 铺垫 ${(first.end - first.start).toFixed(1)}s 后进入。` : ` 从 ${fmtTime(first.start, { ms: 1 })} 开始。`),
     last && h("p", { class: "why-edge" }, h("strong", {}, "结尾："), last.detail ? ` ${last.detail}` : ` 在 ${fmtTime(last.end, { ms: 1 })}。`),
@@ -863,12 +1207,10 @@ function trimCandidate(which, delta) {
     const now = which === "start" ? edgeSeg.start : edgeSeg.end;
     if (Math.abs(now - old) < 1e-9) { toast("到头了：再移会超出素材范围或吃掉整段", { timeout: 2200 }); return; }
     applyEdit(`${which === "start" ? "开头" : "结尾"} ${delta > 0 ? "+" : "−"}${Math.abs(delta)}s`, changes, { key: `trim:${out().id}:${which}` });
-    renderWhy();
-    fitCandidateTimeline(out());
-    const kept = keptSegments(out());
+    if (candidateMode()) { renderWhy(); fitCandidateTimeline(out()); }
     player.seekSource(edgeSeg.source, which === "start" ? edgeSeg.start : Math.max(edgeSeg.start, edgeSeg.end - 3));
     announce(`${which === "start" ? "开头" : "结尾"}改到 ${fmtTime(now, { ms: 1 })}，现在 ${fmtTime(outputDuration(out()))} 长`);
-    void kept;
+    return true;
   } catch (e) { toast(e.message, { kind: "error" }); }
 }
 
@@ -1001,11 +1343,11 @@ async function requestRender() {
 async function startRender(ids) {
   clearBanner("render-error");
   let r;
-  try { r = await api.render(ids); } catch (e) {
+  try { r = await api.render(ids, { loudnorm: state.renderOpts.loudnorm }); } catch (e) {
     setBanner("render-error", { kind: "error", title: "没能开始出片：", body: e.message, actions: [{ label: "重试", onclick: () => startRender(ids) }] });
     return;
   }
-  state.job = { id: r.job, ids, status: "running", fraction: 0, stage: "准备", eta: null };
+  state.job = { id: r.job, ids, status: "running", fraction: 0, stage: "准备", eta: null, captionMode: captionMode(out()), loudnorm: state.renderOpts.loudnorm };
   renderJobBar();
   announce("开始出片");
   pollJob(r.job, ids);
@@ -1039,7 +1381,7 @@ function resultsOf(job) {
     const dur = x.duration ?? x.duration_s ?? x.expected_duration;
     const drift = x.av_drift ?? x.drift;
     const lufs = x.loudness?.target ?? (typeof x.loudness === "number" ? x.loudness : x.lufs);
-    return { id: x.output_id ?? x.id, path, name: basename(path), dur, drift, lufs, warnings: x.warnings ?? [] };
+    return { id: x.output_id ?? x.id, path, name: basename(path), dur, drift, lufs, srt: x.srt_path ?? null, warnings: x.warnings ?? [] };
   });
 }
 
@@ -1061,8 +1403,9 @@ function renderJobBar() {
     bar.className = "jobbar is-done";
     const line = (r) => {
       const sync = r.drift == null ? null : r.drift <= 0.05 ? `音画同步 ✓` : `${GLYPH.warn} 音画相差 ${(r.drift * 1000).toFixed(0)}ms`;
-      const text = [r.name, r.dur != null && fmtTime(r.dur), sync, r.lufs != null && `响度 ${Number(r.lufs).toFixed(1)} LUFS`].filter(Boolean).join(" · ");
-      return h("span", { title: r.path }, text); // 完整路径放在悬停提示里
+      const text = [r.name, r.dur != null && fmtTime(r.dur), sync, r.lufs != null ? `响度 ${Number(r.lufs).toFixed(1)} LUFS` : "响度未标准化"].filter(Boolean).join(" · ");
+      const cap = j.captionMode === "burn" ? "字幕已烧进画面" : r.srt ? `字幕：${basename(r.srt)}（单独文件，没有烧进画面）` : j.captionMode === "off" ? "没有字幕" : null;
+      return h("span", { title: r.path }, text, cap ? h("span", { class: "job-cap" }, ` · ${cap}`) : null); // 完整路径放在悬停提示里
     };
     const warns = rs.flatMap((r) => r.warnings.map((w) => `${r.id ? r.id + "：" : ""}${w}`));
     fill(bar, 
@@ -1070,6 +1413,7 @@ function renderJobBar() {
         rs.length === 1 ? line(rs[0]) : h("span", {}, ` · 共 ${fmtTime(rs.reduce((a, r) => a + (r.dur ?? 0), 0))}${rs.every((r) => r.drift != null && r.drift <= 0.05) ? " · 音画同步 ✓" : ""}`),
         rs.length > 1 && h("details", {}, h("summary", {}, "每个文件"), rs.map((r) => h("div", { class: "job-line" }, line(r)))),
         warns.length ? h("div", { class: "job-warn" }, GLYPH.warn, " ", warns.join("；")) : null),
+      rs[0]?.path && h("span", { class: "job-dir mono", title: rs[0].path }, `目录：${rs[0].path.replace(/[^/]*$/, "")}`),
       rs[0]?.path && h("button", { class: "btn btn-sm", onclick: () => api.reveal(rs[0].path).catch((e) => toast(e.message, { kind: "error" })) }, "在 Finder 中显示"),
       h("button", { class: "icon-btn", "aria-label": "收起这条结果", onclick: () => { state.job = null; renderJobBar(); } }, "×"));
   } else {
@@ -1080,31 +1424,6 @@ function renderJobBar() {
 }
 
 // 体检 ---------------------------------------------------------------
-const DISCLAIMER = "这些是留存风险信号，不是爆款保证。";
-
-function normalizeReport(rep) {
-  // check.py 的 CheckReport.to_dict()：items[{id, severity: risk|warn|info, at, end, message, fix}]（时间是成片时间轴上的秒）
-  const arr = ["items", "findings", "risks", "issues", "signals", "checks"].map((k) => rep?.[k]).find(Array.isArray) ?? [];
-  const order = { risk: 0, high: 0, critical: 0, error: 0, warn: 1, warning: 1, medium: 1, info: 2, low: 2 };
-  const items = arr.map((x, i) => {
-    const t = [x.at, x.time, x.t, x.start, x.position, x.out_start].find((v) => typeof v === "number");
-    const space = x.source_time != null || x.src_start != null ? "source" : "output";
-    const tt = x.source_time ?? x.src_start ?? t;
-    const message = x.message ?? x.detail ?? x.text ?? x.why ?? "";
-    return {
-      i, t: typeof tt === "number" ? tt : null, end: [x.end, x.out_end, x.src_end].find((v) => typeof v === "number") ?? null, space,
-      severity: String(x.severity ?? x.level ?? "info").toLowerCase(),
-      code: x.id ?? x.kind ?? x.rule ?? null,
-      title: x.title ?? message ?? "提示",
-      message: x.title ? message : "",
-      advice: x.fix ?? x.suggestion ?? x.advice ?? x.action ?? "",
-    };
-  }).sort((a, b) => (order[a.severity] ?? 3) - (order[b.severity] ?? 3) || (a.t ?? 1e9) - (b.t ?? 1e9));
-  const disclaimer = rep?.disclaimer ?? rep?.note ?? DISCLAIMER;
-  const summary = String(rep?.summary ?? rep?.headline ?? "").replace(disclaimer, "").trim();
-  return { items, summary, disclaimer, raw: rep };
-}
-
 const SEV = {
   risk: ["▲", "风险"], high: ["▲", "风险"], critical: ["▲", "风险"], error: ["▲", "风险"],
   warn: ["◆", "提醒"], warning: ["◆", "提醒"], medium: ["◆", "提醒"],
@@ -1112,7 +1431,7 @@ const SEV = {
 };
 
 async function runCheck() {
-  openDrawer();
+  openDrawer("check");
   const body = $("#drawer-body");
   fill(body, h("p", { class: "muted", role: "status" }, `正在体检${candidateMode() ? "「" + (out().title || out().id) + "」" : ""}…按方案估算，不渲染；没有文字稿时会先识别语音，第一次可能要几分钟。`));
   try { await flushSave(); } catch (e) { fill(body, errorPanel("体检前需要先保存", e.message)); return; }
@@ -1124,30 +1443,69 @@ async function runCheck() {
   }
 }
 
+function checkCtx() {
+  return { duration: state.check?.duration || outputDuration(out()), captionMode: captionMode(out()), sourcePath: state.plan.sources[mainSource()]?.path ?? "素材.mp4" };
+}
+
 function renderCheck() {
   const rep = state.check;
+  if (!rep || state.drawer !== "check") return;
   const body = $("#drawer-body");
-  const dur = outputDuration(out()) || 1;
-  const track = h("div", { class: "risk-track", role: "group", "aria-label": "风险时间线（成片时间）" },
-    ...rep.items.filter((x) => x.t != null).map((x) => {
+  const dur = rep.duration || outputDuration(out()) || 1;
+  const track = h("div", { class: "risk-track", role: "group", "aria-label": "风险时间线（成片时间；整条成片的问题不在这里）" },
+    ...rep.timed.map((x) => {
       const [glyph, label] = SEV[x.severity] ?? SEV.info;
       return h("button", { class: `risk-pin sev-${x.severity}`, style: { left: `${Math.min(100, (x.t / dur) * 100)}%` }, "aria-label": `${label} ${fmtTime(x.t)} ${x.title}`, title: `${fmtTime(x.t)} ${x.title}`, onclick: () => jumpToCheck(x) }, glyph);
     }));
-  fill(body, 
+  const card = (x) => {
+    const [glyph, label] = SEV[x.severity] ?? SEV.info;
+    const acts = checkActions(x, checkCtx());
+    return h("li", { class: `risk-card sev-${x.severity}` },
+      h("div", { class: "risk-sev" }, h("span", { "aria-hidden": "true" }, glyph), " ", label,
+        x.whole ? h("span", { class: "risk-time" }, " · 整条成片") : x.t != null ? h("button", { class: "linklike mono risk-time", onclick: () => jumpToCheck(x), "aria-label": `跳到 ${fmtTime(x.t)}` }, ` · ${fmtTime(x.t)}`) : null),
+      h("strong", {}, x.title),
+      x.message && h("span", { class: "risk-msg" }, x.message),
+      x.advice && h("span", { class: "risk-advice" }, "建议：", x.advice),
+      acts.length ? h("div", { class: "risk-actions" }, ...acts.map((act) => h("button", { class: "btn btn-sm", onclick: () => runCheckAction(act, x) }, act.label))) : null);
+  };
+  fill(body,
     rep.summary && h("p", { class: "check-summary" }, String(rep.summary)),
-    rep.items.length ? h("div", { class: "risk-wrap" }, track, h("div", { class: "risk-axis mono" }, h("span", {}, "00:00"), h("span", {}, fmtTime(dur)))) : h("p", {}, "没有发现需要注意的信号。"),
-    h("ol", { class: "risk-list" }, ...rep.items.map((x) => {
-      const [glyph, label] = SEV[x.severity] ?? SEV.info;
-      return h("li", {}, h("button", { class: `risk-item sev-${x.severity}`, onclick: () => jumpToCheck(x) },
-        h("span", { class: "risk-sev" }, h("span", { "aria-hidden": "true" }, glyph), " ", label),
-        x.t != null && h("span", { class: "mono risk-time" }, fmtTime(x.t)),
-        h("strong", {}, x.title),
-        x.message && h("span", { class: "risk-msg" }, x.message),
-        x.advice && h("span", { class: "risk-advice" }, "建议：", x.advice)));
-    })),
-    !rep.items.length && !rep.summary && h("pre", { class: "pre" }, JSON.stringify(rep.raw, null, 2)),
+    rep.timed.length ? h("div", { class: "risk-wrap" }, track, h("div", { class: "risk-axis mono" }, h("span", {}, "00:00"), h("span", {}, fmtTime(dur)))) : null,
+    rep.timed.length ? h("ol", { class: "risk-list" }, ...rep.timed.map(card)) : null,
+    rep.whole.length ? h("h3", { class: "risk-group" }, "整条成片的问题", h("span", { class: "muted small" }, "（不在某一秒，所以不上时间线）")) : null,
+    rep.whole.length ? h("ol", { class: "risk-list" }, ...rep.whole.map(card)) : null,
+    !rep.items.length ? h("p", {}, "没有发现需要注意的信号。") : null,
     h("p", { class: "disclaimer" }, rep.disclaimer),
   );
+}
+
+/** 体检建议 → 页面里的动作。做不到的（挪句子顺序、加画面变化）写明"在剪辑软件里做"，并直接给导出入口。 */
+function runCheckAction(act, item) {
+  switch (act.kind) {
+    case "jump": jumpToCheck(item); break;
+    case "jump-edge": {
+      const k = keptSegments(out());
+      const seg = act.which === "start" ? k[0] : k[k.length - 1];
+      if (seg) { selectSeg(seg.id, { seek: true, focus: true, edge: act.which }); player.seekSource(seg.source, act.which === "start" ? seg.start : Math.max(seg.start, seg.end - 2)); }
+      toast(`已选中${act.which === "start" ? "开头" : "结尾"}那一段：用“多留 / 少留”或 [ ] 调整切点`, { timeout: 4500 });
+      break;
+    }
+    case "trim":
+      if (trimCandidate(act.which, act.delta)) { toast(`${act.label}：已改，可以 ${MOD}Z 撤销。重新体检看看`, { timeout: 4500 }); }
+      break;
+    case "loudnorm":
+      state.renderOpts.loudnorm = true;
+      refreshRenderOpts();
+      toast("出片时会把响度标准化到平台常用值（-14 LUFS）", { kind: "ok", timeout: 4500 });
+      break;
+    case "captions": setCaptions(act.mode); toast("字幕会烧进画面", { kind: "ok", timeout: 3500 }); break;
+    case "aspect": case "size": setSize(act.preset, { withReframe: act.kind === "aspect" }); break;
+    case "filter-silence": setFilter({ kind: "all", reason: "silence" }); toast("已筛出被剪掉的长停顿：逐条看哪些还能再缩或改回保留", { timeout: 4500 }); break;
+    case "export": $("#export-btn").click(); break;
+    case "copy": copyText(act.text).then(() => toast("命令已复制", { timeout: 1800 })); break;
+    default: break;
+  }
+  renderCheck();
 }
 
 function jumpToCheck(x) {
@@ -1159,8 +1517,92 @@ function jumpToCheck(x) {
   if (seg) selectSeg(seg.id, { seek: false });
 }
 
-function openDrawer() { $("#drawer").hidden = false; $app.classList.add("with-drawer"); }
-function closeDrawer() { $("#drawer").hidden = true; $app.classList.remove("with-drawer"); $("#check-btn").focus(); }
+function openDrawer(kind) {
+  state.drawer = kind;
+  $("#drawer").hidden = false;
+  $app.classList.add("with-drawer");
+  $("#drawer-title").textContent = kind === "conflict" ? "方案冲突" : "发布前体检";
+  $("#drawer").setAttribute("aria-label", kind === "conflict" ? "方案冲突" : "发布前体检");
+  $("#drawer-rerun").hidden = kind !== "check";
+}
+function closeDrawer({ focus = true } = {}) {
+  const kind = state.drawer;
+  state.drawer = null;
+  $("#drawer").hidden = true;
+  $app.classList.remove("with-drawer");
+  if (focus) (kind === "conflict" ? $("#uncertain-btn") : $("#check-btn")).focus();
+}
+
+// 字幕 ---------------------------------------------------------------
+const CAP_NAME = { off: "关", srt: "单独 srt", burn: "烧进画面" };
+
+/** mode: off | srt | burn。候选清单模式下一次改所有候选（批量出片，字幕设置应该一致）。 */
+function setCaptions(mode) {
+  const targets = candidateMode() ? state.plan.outputs : [out()];
+  if (targets.every((o) => captionMode(o) === mode)) return;
+  applyEdit(captionLabel(mode), targets.flatMap((o) => setCaptionMode(o, mode)));
+  announce(captionLabel(mode));
+}
+
+async function loadCues() {
+  if (!state.meta.capabilities.captions) return;
+  const id = out().id;
+  try { state.cues[id] = await api.captions(id); } catch (e) { state.cues[id] = { cues: [], has_words: false, reason: e.message, error: true }; }
+  refreshCaptionUI();
+}
+const loadCuesSoon = debounce(() => loadCues(), 400);
+
+function refreshCaptionUI() {
+  const btn = $("#cap-btn");
+  if (!btn) return;
+  const mode = captionMode(out());
+  btn.textContent = `字幕：${CAP_NAME[mode]} ▾`;
+  btn.disabled = !state.meta.capabilities.captions;
+  btn.title = state.meta.capabilities.captions ? "预览里叠加字幕；选“烧进画面”出片时字幕会画在视频上，选“单独 srt”会另外写一个 .srt 文件" : "字幕模块还没装好";
+  const badge = $("#cap-badge");
+  badge.hidden = mode === "off";
+  badge.textContent = mode === "burn" ? "字幕：烧进画面" : "字幕：单独 srt（不烧进画面）";
+  const info = state.cues[out().id];
+  $("#cap-note")?.toggleAttribute("hidden", !(mode !== "off" && info && !info.has_words));
+  for (const r of $$("input[name=opt-cap]")) r.checked = r.value === mode;
+  updateCaption(player?.state().outTime);
+}
+
+let lastCap = null;
+function updateCaption(ot) {
+  const el = $("#cap-overlay");
+  if (!el) return;
+  const mode = captionMode(out());
+  const info = state.cues[out().id];
+  const cue = mode !== "off" && info && ot != null ? findCue(info.cues, ot) : null;
+  el.hidden = !cue;
+  if (cue?.text !== lastCap) { lastCap = cue?.text ?? null; el.firstElementChild.textContent = cue?.text ?? ""; }
+  el.className = `cap-overlay cap-${mode}`;
+}
+
+// 成片尺寸 / 出片选项 ---------------------------------------------------
+/** preset: source / vertical / horizontal / 720p / 1080p；候选清单模式一次改所有候选。 */
+function setSize(preset, { withReframe = false } = {}) {
+  const targets = candidateMode() ? state.plan.outputs : [out()];
+  const changes = targets.flatMap((o) => {
+    const size = sizeForPreset(o, sources(), preset);
+    return [...setOutputSize(o, size), ...(withReframe ? ensureReframeFor(o) : [])];
+  });
+  applyEdit(`成片尺寸：${preset}`, changes);
+  if (candidateMode()) ensureFrameLayout();
+  toast("成片尺寸已改，可以 " + MOD + "Z 撤销。重新体检看看", { kind: "ok", timeout: 4500 });
+  refreshRenderOpts();
+}
+
+function ensureReframeFor(o) { return ensureReframe(o); }
+
+function refreshRenderOpts() {
+  const ln = state.renderOpts.loudnorm;
+  for (const r of $$("input[name=opt-ln]")) r.checked = r.value === (ln === null ? "default" : ln === false ? "off" : "on");
+  const p = sizePresetOf(out());
+  for (const r of $$("input[name=opt-size]")) r.checked = r.value === p;
+  $("#opts-btn")?.classList.toggle("has-opts", ln !== null);
+}
 
 // 导出 ---------------------------------------------------------------
 async function doExport(fmt) {
@@ -1189,14 +1631,25 @@ function bindChrome() {
   $("#drawer-close").addEventListener("click", closeDrawer);
   $("#drawer-rerun").addEventListener("click", runCheck);
   $("#undo-btn").addEventListener("click", () => undo());
-  menu($("#export-btn"), () => state.meta.formats.map((f) => ({ label: FORMAT_LABEL[f]?.[0] ?? f, hint: f, onselect: () => doExport(f) })));
+  $("#redo-btn").addEventListener("click", () => undo(true));
+  menu($("#export-btn"), () => [
+    ...state.meta.formats.map((f) => ({ label: FORMAT_LABEL[f]?.[0] ?? f, hint: f, onselect: () => doExport(f) })),
+    { note: "剪映：这几种格式能否直接导入没有验证过；稳妥的做法是用“出片”得到的 mp4，再加“字幕 srt”。" },
+  ]);
+  menu($("#cap-btn"), () => ["off", "srt", "burn"].map((m) => ({ label: `${captionMode(out()) === m ? "✓ " : ""}${CAP_NAME[m]}`, hint: m === "burn" ? "画在视频上" : m === "srt" ? "另存 .srt" : "", onselect: () => setCaptions(m) })));
+  const optsDlg = $("#render-opts");
+  $("#opts-btn").addEventListener("click", () => { refreshRenderOpts(); refreshCaptionUI(); optsDlg.showModal(); });
+  $("#opts-close").addEventListener("click", () => optsDlg.close());
+  for (const r of $$("input[name=opt-cap]")) r.addEventListener("change", () => setCaptions(r.value));
+  for (const r of $$("input[name=opt-ln]")) r.addEventListener("change", () => { state.renderOpts.loudnorm = r.value === "default" ? null : r.value === "on" ? true : false; refreshRenderOpts(); });
+  for (const r of $$("input[name=opt-size]")) r.addEventListener("change", () => setSize(r.value, { withReframe: r.value === "vertical" }));
 
   // 节奏档位
   const pace = $("#pace");
   pace.addEventListener("click", (e) => {
     const b = e.target.closest("[data-pace]");
     if (!b || b.getAttribute("aria-checked") === "true") return;
-    showPaceHelp(b.dataset.pace);
+    changePace(b.dataset.pace);
   });
   pace.addEventListener("keydown", (e) => {
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
@@ -1212,7 +1665,7 @@ function bindChrome() {
   $("#opt-audition").checked = state.auditionNudge;
   $("#opt-audition").addEventListener("change", (e) => { state.auditionNudge = e.target.checked; store.setItem("autocut.review.auditionNudge", e.target.checked ? "1" : "0"); });
   $$("[data-mod]").forEach((el) => { el.textContent = MOD; });
-  const sizes = ["", "lg", "xl"];
+  const sizes = ["", "lg", "xl", "xxl"];
   const applySize = (s) => { document.documentElement.dataset.size = s; store.setItem("autocut.review.size", s); };
   applySize(store.getItem("autocut.review.size") ?? "");
   $("#size-btn").addEventListener("click", () => applySize(sizes[(sizes.indexOf(document.documentElement.dataset.size ?? "") + 1) % sizes.length]));
@@ -1229,13 +1682,52 @@ function bindChrome() {
   window.addEventListener("pagehide", () => { if (state.dirty && !state.conflict) api.save(state.revision, state.etag, state.plan, { keepalive: true }).catch(() => {}); });
 }
 
-function showPaceHelp(id) {
+/**
+ * 改节奏：服务器端调用 recipes.cut.repace 重新划分每个停顿保留多长（跳过手改过和锁定的片段），保存后返回新方案。
+ * 页面把差异套到当前方案上，记成一条可撤销的历史，并把变了的行标出来（#1）。前端不重算。
+ */
+async function changePace(id) {
+  const label = PACE_LEVELS.find((l) => l.id === id)?.label ?? id;
+  if (!state.meta.capabilities.repace) { showPaceFallback(id, label); return; }
+  try { await flushSave(); } catch (e) { toast(e.message, { kind: "error" }); return; }
+  const t = toast(`正在按“${label}”重新划分停顿…`, { timeout: 0 });
+  let r;
+  try { r = await api.repace(id, state.revision, state.etag, out().id); } catch (e) {
+    t.remove();
+    if (e.status === 409) { await absorbDisk(e.body.disk); toast("方案刚被外部修改过，已合并；请再点一次节奏档位", { timeout: 5000 }); return; }
+    toast(e.message, { kind: "error", timeout: 9000 });
+    return;
+  }
+  t.remove();
+  const theirs = normalizePlan(r.plan);
+  const d = diffPlans(state.plan, theirs);
+  const skipped = out().segments.filter((s) => (s.locked || s.evidence.edited) && (s.reason === "pause" || s.reason === "silence")).length;
+  if (d.changes.length) {
+    applyChanges(state.plan, d.changes);
+    applyChanges(state.base, d.changes); // 节奏调整不算“我改的”
+    state.undo.push(`节奏改成“${label}”`, d.changes, { meta: { base: true } }); // 撤销/重做时 base 也跟着走
+  }
+  state.revision = r.revision;
+  state.etag = r.etag;
+  state.synced = clone(theirs);
+  state.editSeq++;
+  if (d.items.length) setMarks(d.items, "节奏已调");
+  await loadOutput();
+  refreshHeader();
+  toast(r.changed
+    ? `节奏改成“${label}”：${r.changed} 个片段变了${skipped ? `；你手改过或锁定的 ${skipped} 个停顿没动` : ""}`
+    : `节奏已是“${label}”：没有片段需要改${skipped ? `（手改过或锁定的 ${skipped} 个停顿本来就不动）` : ""}`,
+  { kind: "ok", timeout: 7000, action: d.changes.length ? { label: "撤销", onclick: () => undo() } : null });
+  announce(`节奏改成${label}，${r.changed} 个片段变了`);
+}
+
+/** 节奏重算模块没装好时的退路：给终端命令，不假装能改。 */
+function showPaceFallback(id, label) {
   const src = state.plan.sources[mainSource()]?.path ?? "素材.mp4";
   const cmd = `autocut cut "${src}" --pace ${id}`;
-  const label = PACE_LEVELS.find((l) => l.id === id)?.label ?? id;
   setBanner("pace", {
     kind: "info", title: `想用“${label}”节奏：`,
-    body: h("span", {}, "改节奏要重新生成方案（节奏决定保留多长的停顿，前端不重算）。在终端运行：", h("code", { class: "cmd" }, cmd), " ", "已经手动改过、并且锁定（L）的片段会保留。"),
+    body: h("span", {}, "页面里的节奏重算模块还没装好，现在只能重新生成方案（会覆盖你手改过的部分，改之前先备份方案文件）。终端命令：", h("code", { class: "cmd" }, cmd)),
     actions: [{ label: "复制命令", onclick: () => copyText(cmd).then(() => toast("命令已复制", { timeout: 1800 })) }],
   });
 }
@@ -1250,7 +1742,7 @@ function onKey(e) {
   if (mod && e.code === "KeyZ") { e.preventDefault(); undo(e.shiftKey); return; }
   if (mod && e.code === "KeyY") { e.preventDefault(); undo(true); return; }
   if (mod || e.altKey) return;
-  const onButton = e.target.closest?.("button, a, summary, [role=menuitem], [role=radio], input");
+  const onButton = e.target.closest?.("button, a, summary, [role=menuitem], [role=radio], input") && !e.target.closest?.(".cand-main"); // 候选按钮上空格播放、↑↓ 切换候选
   switch (e.code) {
     case "Space":
       if (onButton) return; // 焦点在按钮上时，空格留给按钮本身
@@ -1260,6 +1752,7 @@ function onKey(e) {
     case "KeyX": e.preventDefault(); toggleSelected(); return;
     case "KeyL": e.preventDefault(); toggleLock(); return;
     case "KeyE": e.preventDefault(); switchEdge(); return;
+    case "KeyA": e.preventDefault(); stepMark(e.shiftKey ? -1 : 1); return;
     case "KeyP": e.preventDefault(); setPlayMode(state.playMode === "plan" ? "orig" : "plan"); return;
     case "KeyS": if (candidateMode()) { e.preventDefault(); toggleCandidate(state.outputId, !out().selected); } return;
     case "Enter": if (!onButton) { e.preventDefault(); auditionSegment(); } return;

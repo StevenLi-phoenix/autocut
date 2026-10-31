@@ -14,6 +14,13 @@
 离语音边缘至少 GUARD），或者两个相邻词之间能量最低的帧上；绝不落在一个词的中间。
 
 segments 覆盖整个素材、首尾相接，剪掉的片段留在列表里，审阅页可以一键改回保留。
+
+把握度（confidence）由证据计算，不按类别取常数：停顿看长度离阈值多远、停在句末还是句中或问句后、停顿里有没有
+接近人声的声音；重说看两遍的相似度、有没有重来标记、后一遍是否更长；口头禅看 whisper 给的概率、前后是否紧贴实词；
+游戏实况看游戏轨爆发的强度和画面切换。公式在 silence_confidence / pause_confidence / retake_confidence /
+filler_confidence / action_confidence / idle_confidence 的 docstring 里，分项写进每个片段的 evidence。
+
+repace(plan, pace)：不重新分析，只按新的 pace 重新划分各个停顿（审阅页的节奏档位用它）。
 """
 
 from __future__ import annotations
@@ -35,6 +42,7 @@ from autocut.analysis import SR, Media
 from autocut.audio import frame_db, resolve_track
 from autocut.plan import Captions, Output, Plan, Segment, new_segment_id
 from autocut.recipes._common import RecipeError, make_source, mmss, plan_path_for, runs, unique_id
+from autocut.speech import SpeechResult
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +56,13 @@ HOP = 0.01  # 能量曲线帧移
 SNAP_WINDOW = 0.05  # 停顿里的剪口在目标位置 ±此范围内找能量最低点
 WORD_SNAP_BEFORE, WORD_SNAP_AFTER = 0.1, 0.15  # 词间（没有停顿）剪口的搜索窗；t_dtw 偏早，往后多找一点
 SNAP_TIE_DB = 1.0  # 比最低点高不到这么多的帧都算"最低"，取离目标最近的
+MIN_MID = 0.05  # 停顿片段最短这么长
+
+# ---- 把握度（公式见 silence_confidence 等函数的 docstring）
+PAUSE_SCALE = 0.3  # 停顿长度离阈值每远这么多秒，"不确定"缩小到 1/e
+CONTEXT_FACTOR = {"sentence_end": 1.0, "edge": 1.0, "unknown": 0.95, "mid_sentence": 0.85, "question": 0.8}
+QUIET_PENALTY = 0.4  # 停顿里的电平接近语音阈值时，剪停顿的把握度最多扣这么多
+_QUESTION = set("？?")
 
 # ---- 句子切分与重说
 CLAUSE_GAP = 0.25  # 词间停顿 ≥ 此值算小句边界
@@ -423,21 +438,26 @@ def _retakes_marked(cl: list[_Clause], taken: set[int]) -> list[_Decision]:
             s = _sim("".join(c.norm for c in cl[k:ci]), r)
             if s > best_s + 1e-9 or (best_k is not None and abs(s - best_s) <= 1e-9):
                 best_k, best_s = k, max(s, best_s)
-        if best_k is not None and best_s >= RETAKE_MARKER_SIM:
-            k0, conf = best_k, 0.95 if best_s >= RETAKE_SIM else 0.85
+        known = best_k is not None and best_s >= RETAKE_MARKER_SIM
+        if known:
+            k0 = best_k
             detail = (f"重说：被 {mmss(restart.start)} 那句「{_short(_restart_text(cl, cj + 1, True))}」取代"
                       f"（相似度 {best_s:.2f}，有重来标记「{marker_text}」）")
         elif strong:
-            k0, conf = _sent_start(cl, ci - 1), 0.7
+            k0 = _sent_start(cl, ci - 1)
             detail = (f"重说：出现重来标记「{marker_text}」，剪掉它和前面那句，保留 {mmss(restart.start)} 开始的重说；"
-                      f"但前后两遍不太像（相似度 {best_s:.2f}），请确认")
+                      f"但前后两遍不太像（相似度 {best_s:.2f}），往回剪到哪里是猜的，请确认")
         else:
             ci = cj + 1
             continue  # 弱标记（sorry / 不对）又找不到相似的重说：可能是正常说话，不剪
+        assert k0 is not None
+        abandoned = "".join(c.norm for c in cl[k0:ci])
+        longer = len(r) >= len(abandoned) * RETAKE_LONGER + 1
+        conf, parts = retake_confidence(best_s, "strong" if strong else "weak", longer, known)
         text = _join(c.text for c in cl[k0: cj + 1])
         out.append(_Decision(cl[k0].i0, cl[cj].i1, "cut", "retake", conf, detail, text,
-                             {"similarity": round(best_s, 3), "marker": marker_text,
-                              "replaced_by": round(restart.start, 3)}))
+                             {"similarity": round(best_s, 3), "marker": marker_text, "marker_kind": "strong" if strong else "weak",
+                              "longer": longer, "replaced_by": round(restart.start, 3), **parts}))
         taken.update(range(k0, cj + 1))
         ci = cj + 1
     return out
@@ -463,11 +483,12 @@ def _retakes_similar(cl: list[_Clause], taken: set[int]) -> list[_Decision]:
             continue
         k0, s = best
         restart = cl[ci + 1]
-        conf = round(0.6 + 0.25 * (s - RETAKE_SIM) / (1 - RETAKE_SIM), 2)
-        detail = f"重说：紧接着 {mmss(restart.start)} 那句「{_short(_restart_text(cl, ci + 1, True))}」开头几乎一样（相似度 {s:.2f}），保留后一遍"
+        conf, parts = retake_confidence(s, None, True)  # 走到这里后一遍一定更长
+        detail = (f"重说：紧接着 {mmss(restart.start)} 那句「{_short(_restart_text(cl, ci + 1, True))}」开头很像"
+                  f"（相似度 {s:.2f}，没有重来标记），保留后一遍")
         out.append(_Decision(cl[k0].i0, cl[ci].i1, "cut", "retake", conf, detail,
                              _join(c.text for c in cl[k0: ci + 1]),
-                             {"similarity": round(s, 3), "replaced_by": round(restart.start, 3)}))
+                             {"similarity": round(s, 3), "longer": True, "replaced_by": round(restart.start, 3), **parts}))
         taken.update(range(k0, ci + 1))
     return out
 
@@ -482,22 +503,332 @@ def _fillers(ws: list[dict[str, Any]], cl: list[_Clause], taken: set[int]) -> li
             continue
         before = ws[c.i0]["start"] - ws[c.i0 - 1]["end"] if c.i0 > 0 else math.inf
         after = ws[c.i1 + 1]["start"] - ws[c.i1]["end"] if c.i1 + 1 < len(ws) else math.inf
-        paused = before >= transcribe.SNAP_MIN_SILENCE and after >= transcribe.SNAP_MIN_SILENCE
+        pb, pa = before >= transcribe.SNAP_MIN_SILENCE, after >= transcribe.SNAP_MIN_SILENCE
         word = _join(ws[i]["text"] for i in range(c.i0, c.i1 + 1))
-        ev = {"word": word, "p": round(min(ws[i]["p"] for i in range(c.i0, c.i1 + 1)), 3),
-              "pause_before": _rnd(before), "pause_after": _rnd(after)}
-        where = "前后都有停顿" if paused else "前后有标点、没有明显停顿，剪口落在词间能量最低处"
-        if kind == "core":
-            d = _Decision(c.i0, c.i1, "cut", "filler", 0.9 if paused else 0.8, f"口头禅「{word}」，{where}", c.text, ev)
-        elif kind == "soft":
-            d = _Decision(c.i0, c.i1, "cut", "filler", 0.6,
-                          f"「{word}」单独出现，多半是口头禅，也可能是有意义的感叹：剪掉了，请确认", c.text, ev)
+        p = min(ws[i]["p"] for i in range(c.i0, c.i1 + 1))
+        ev: dict[str, Any] = {"word": word, "p": round(p, 3), "pause_before": _rnd(before), "pause_after": _rnd(after)}
+        where = ("前后都有停顿" if pb and pa else "一侧紧贴着别的词，剪口落在词间能量最低处" if pb or pa
+                 else "前后都紧贴着别的词，剪口落在词间能量最低处，可能带走字头字尾")
+        low_p = f"；识别把握不高（p={p:.2f}），可能不是「{word}」" if p < 0.4 else ""
+        if kind in ("core", "soft"):
+            conf, parts = filler_confidence(kind, p, pb, pa)
+            ev.update(parts)
+            what = f"口头禅「{word}」" if kind == "core" else f"「{word}」单独出现，多半是口头禅，也可能是有意义的感叹"
+            d = _Decision(c.i0, c.i1, "cut", "filler", conf, f"{what}，{where}{low_p}", c.text, ev)
         else:
-            d = _Decision(c.i0, c.i1, "keep", "filler", 0.4,
+            # 只标记不剪：保留对不对 ≈ 它不是口头禅的概率；前后都停顿、单独成句时更像口头禅
+            conf = 0.5 - 0.1 * (pb and pa)
+            d = _Decision(c.i0, c.i1, "keep", "filler", conf,
                           f"「{word}」单独出现，可能是口头禅，也可能在指代或承接：没有剪，需要时一键剪掉", c.text, ev)
         out.append(d)
         taken.add(ci)
     return out
+
+
+# ------------------------------------------------------------------ 把握度：由证据计算
+#
+# confidence 估计的是"一个仔细的剪辑师会同意这一刀/这一留"的概率；低于 UNCERTAIN_BELOW（0.75）进"拿不准"。
+# 每个函数返回 (把握度, 用到的分项)，分项原样写进 segment.evidence，审阅页和 agent 都能看到依据（B3）。
+
+
+def _margin(d: float, scale: float) -> float:
+    """离判断阈值的距离 d → 0.5 + 0.5·(1 − e^(−d/scale))：正好在阈值上是 0.5（两种决定都说得通），越远越接近 1。"""
+    return 0.5 + 0.5 * (1.0 - math.exp(-max(d, 0.0) / scale))
+
+
+def _noisy_or(parts: Iterable[float]) -> float:
+    left = 1.0
+    for p in parts:
+        left *= 1.0 - min(max(p, 0.0), 1.0)
+    return 1.0 - left
+
+
+def silence_confidence(gap: float, threshold: float, context: str = "unknown", level: float = 0.0
+                       ) -> tuple[float, dict[str, Any]]:
+    """剪掉长停顿的中间：c = m × f_ctx × f_quiet。
+
+    - m = 0.5 + 0.5·(1 − e^(−(gap − threshold)/0.3))：threshold = 保留长度 + SLACK（素材头尾是保留长度/2 + SLACK）。
+      刚过阈值 ≈ 0.5，长出 0.3s ≈ 0.82，长出 1s ≈ 0.98。
+    - f_ctx：停顿前一个词后面的标点。句末 / 素材头尾 1.0；没有文字稿 0.95；句子中间（逗号或没有标点）0.85；
+      问句之后 0.8（问完问题的停顿可能是有意留给观众想的，SB4）。
+    - f_quiet = 1 − 0.4·clip((level − 0.5)/0.5, 0, 1)：level 是停顿里 95 分位电平在底噪（0）和语音阈值（1）之间的位置；
+      停顿里有接近人声的声音（轻声、气声）时，可能剪到内容。
+    """
+    m = _margin(gap - threshold, PAUSE_SCALE)
+    f_ctx = CONTEXT_FACTOR.get(context, CONTEXT_FACTOR["unknown"])
+    f_quiet = 1.0 - QUIET_PENALTY * min(max((level - 0.5) / 0.5, 0.0), 1.0)
+    return m * f_ctx * f_quiet, {"m": round(m, 3), "f_context": f_ctx, "f_quiet": round(f_quiet, 3)}
+
+
+def pause_confidence(gap: float, threshold: float) -> float:
+    """保留短停顿：c = 1 − 0.1·e^(−(threshold − gap)/0.3)，最低 0.9。
+
+    保留顶多让这个停顿比 pace 多 SLACK 秒，错了代价很小；删光停顿才是风险（A1），所以不把短停顿送去"拿不准"。
+    """
+    return 1.0 - 0.1 * math.exp(-max(threshold - gap, 0.0) / PAUSE_SCALE)
+
+
+def retake_confidence(similarity: float, marker: str | None, longer: bool, extent_known: bool = True
+                      ) -> tuple[float, dict[str, Any]]:
+    """剪掉重说：c = [1 − (1 − e_marker)(1 − e_sim)(1 − e_longer)] × f_extent（几条独立证据的 noisy-or）。
+
+    - e_marker：强标记（重新说 / let me say that again）0.8，弱标记（不对 / sorry）0.5，没有 0。
+    - e_sim = clip(0.5 + (s − 0.6), 0, 0.9)，s < 0.5 时为 0：两遍的字符相似度 0.6 → 0.5，0.9 → 0.8。
+    - e_longer = 0.3：后一遍比前一遍长 ≥ 15%（重说通常说得更完整；排比句长度相近）。
+    - f_extent = 0.8：有标记但找不到相似的那一遍，往回剪多少是猜的。
+    例：标记 + 相似度 0.9 + 更长 → 0.97；只有相似度 0.7 + 更长 → 0.72。
+    """
+    e_marker = {"strong": 0.8, "weak": 0.5}.get(marker or "", 0.0)
+    e_sim = min(max(0.5 + (similarity - 0.6), 0.0), 0.9) if similarity >= RETAKE_MARKER_SIM else 0.0
+    e_longer = 0.3 if longer else 0.0
+    f_extent = 1.0 if extent_known else 0.8
+    c = _noisy_or([e_marker, e_sim, e_longer]) * f_extent
+    return c, {"e_marker": e_marker, "e_sim": round(e_sim, 3), "e_longer": e_longer, "f_extent": f_extent}
+
+
+def filler_confidence(kind: str, p: float, paused_before: bool, paused_after: bool) -> tuple[float, dict[str, Any]]:
+    """剪掉口头禅：c = base × f_p × f_iso。
+
+    - base：嗯 / 呃 / um / uh 0.97；啊 / ah 0.7（也可能是有意义的感叹）。
+    - f_p = 0.6 + 0.4·min(1, p/0.6)：whisper 给这个 token 的概率。p ≥ 0.6 不扣分；p = 0.2 → 0.73（可能根本不是"嗯"）。
+    - f_iso：前后都有停顿 1.0，只有一侧 0.88，两侧都紧贴着实词 0.75（剪口只能落在词间的能量低谷，容易带走字头字尾，A2）。
+    """
+    base = 0.97 if kind == "core" else 0.7
+    f_p = 0.6 + 0.4 * min(1.0, p / 0.6)
+    f_iso = {2: 1.0, 1: 0.88, 0: 0.75}[int(paused_before) + int(paused_after)]
+    return base * f_p * f_iso, {"base": base, "f_p": round(f_p, 3), "f_iso": f_iso}
+
+
+def action_confidence(rise_db: float | None, video_cuts: int) -> tuple[float, dict[str, Any]]:
+    """保留"人声停顿里有动静"：c = max(0.5, 1 − (1 − a)(1 − v))。
+
+    - a = 0.5 + 0.5·(1 − e^(−(rise − 6)/4))：游戏轨最响处比该轨中位数高 rise dB（爆发阈值 6 dB）；
+      刚过阈值 0.5，高 8 dB → 0.69，高 12 dB → 0.89。没有响度爆发时 a = 0。
+    - v = 0.5·(1 − e^(−n/4))：这段里画面切换 n 次。
+    下限 0.5：证据弱也先留着（剪掉看点比多留几秒代价大），但会进"拿不准"。
+    """
+    a = _margin(rise_db - BURST_DB, 4.0) if rise_db is not None else 0.0
+    v = 0.5 * (1.0 - math.exp(-video_cuts / 4.0))
+    return max(0.5, _noisy_or([a, v])), {"a_audio": round(a, 3), "v_video": round(v, 3)}
+
+
+def idle_confidence(rise_db: float, video_cuts: int, has_video: bool, pause: float = 1.0) -> tuple[float, dict[str, Any]]:
+    """剪掉"人声停顿里没动静"：c = pause × q × 0.9^n × f_video。
+
+    - pause：同一个停顿按 silence_confidence 算的把握度（停顿够不够长、停在哪、里面干不干净）。
+    - q = 0.5 + 0.45·(1 − e^(−(6 − rise)/3))：rise = 这段里游戏轨最多比中位数高多少 dB，离 6 dB 的爆发阈值越远
+      越有把握；上限 0.95：只听不看会漏掉没声音的看点（traces S58）。
+    - n：这段里零星的画面切换次数，每次扣一成；f_video = 0.9：素材没有画面，看不到画面变化。
+    """
+    q = 0.5 + 0.45 * (1.0 - math.exp(-max(BURST_DB - rise_db, 0.0) / 3.0))
+    f_video = 1.0 if has_video else 0.9
+    return pause * q * 0.9 ** video_cuts * f_video, {"q_audio": round(q, 3), "f_video": f_video}
+
+
+# ------------------------------------------------------------------ 停顿怎么分（build 和 repace 共用）
+
+
+def _gap_layout(a: float, b: float, left: str, right: str, keep: float) -> tuple[str, float, float]:
+    """停顿 [a, b] 在保留长度 keep 下的划分（名义位置，未吸附）。left / right：两侧是
+    "K"（保留的话）、"C"（剪掉的话）或 "E"（素材头尾）。
+
+    返回 (kind, x, y)：
+    - ("cut", m0, m1)：中间 [m0, m1] 单独成片段（剪掉，游戏实况里可能部分保留），两侧各留一段并进邻居；
+    - ("pause", a, b)：整个停顿单独成一个保留片段；
+    - ("split", t, t)：没有中间片段，左右邻居在 t 相接（保留一侧留 keep/2，其余并进被剪的一侧）；
+    - ("fixed", a, b)：和 pace 无关（整段并进一侧，或两侧都剪）。
+    片段的个数只取决于停顿长度和两侧剪留，不取决于 keep：repace 换 pace 时只挪边界、改剪留，不增删片段。
+    """
+    n, half = b - a, keep / 2
+    if left == "K" and right == "K":
+        if n < PAUSE_SEG_MIN:
+            return "fixed", a, b
+        h = min(half, n / 2)
+        return ("cut", a + h, b - h) if n - 2 * h > SLACK else ("pause", a, b)
+    if "E" in (left, right) and "K" in (left, right):
+        if n < PAUSE_SEG_MIN:
+            return "fixed", a, b
+        h = min(half, n)
+        if n - h <= SLACK:
+            return "pause", a, b
+        return ("cut", a, b - h) if left == "E" else ("cut", a + h, b)
+    if {left, right} == {"K", "C"}:
+        hk = min(half, n / 2)
+        if n < SPLIT_SILENCE_MIN:
+            t = a + hk if left == "K" else b - hk
+            return "split", t, t
+        hc = max(0.0, min(half, n - hk - MIN_MID))  # 被剪一侧也留一段：改回保留时那句话前后有呼吸
+        return ("cut", a + hk, b - hc) if left == "K" else ("cut", a + hc, b - hk)
+    return "fixed", a, b
+
+
+def _threshold(left: str, right: str, keep: float) -> float:
+    """停顿长过多少才剪中间。"""
+    return keep / 2 + SLACK if "E" in (left, right) else keep + SLACK
+
+
+def _what(left: str, right: str) -> str:
+    return "开头静音" if left == "E" else "结尾静音" if right == "E" else "停顿"
+
+
+_CONTEXT_NOTE = {"question": "；问句之后的停顿，可能是留给观众想的", "mid_sentence": "；停在句子中间"}
+
+
+def _silence_fields(n: float, kept: float, keep: float, left: str, right: str, context: str, level: float
+                    ) -> tuple[float, str, dict[str, Any]]:
+    thr = _threshold(left, right, keep)
+    conf, parts = silence_confidence(n, thr, context, level)
+    note = _CONTEXT_NOTE.get(context, "")
+    if parts["f_quiet"] < 1:
+        note += "；停顿里有接近人声的声音"
+    ev = {"gap": _rnd(n), "kept": _rnd(kept), "threshold": round(thr, 3), "context": context,
+          "level": round(level, 3), **parts}
+    return conf, f"{_what(left, right)} {_sec(n)} → 保留 {_sec(kept)}{note}", ev
+
+
+def _pause_fields(n: float, keep: float, left: str, right: str) -> tuple[float, str, dict[str, Any]]:
+    thr = _threshold(left, right, keep)
+    return (pause_confidence(n, thr), f"{_what(left, right)} {_sec(n)}，不超过 {_sec(thr)}，保留",
+            {"gap": _rnd(n), "threshold": round(thr, 3)})
+
+
+def _idle_fields(n: float, length: float, kept: float, keep: float, left: str, right: str, context: str, level: float,
+                 label: str, rise: float, video_cuts: int, has_video: bool) -> tuple[float, str, dict[str, Any]]:
+    thr = _threshold(left, right, keep)
+    pause, sparts = silence_confidence(n, thr, context, level)
+    conf, parts = idle_confidence(rise, video_cuts, has_video, pause)
+    video = (f"画面切换 {video_cuts} 次（零星切换不算看点）" if video_cuts else "画面没有切换") if has_video else "没有画面可看"
+    detail = (f"{_what(left, right)} {_sec(n)} 没人说话，{label}平稳（最多比中位数高 {max(rise, 0.0):.0f} dB），{video}"
+              f" → 剪掉 {_sec(length)}{_CONTEXT_NOTE.get(context, '')}")
+    ev = {"gap": _rnd(n), "kept": _rnd(kept), "threshold": round(thr, 3), "context": context, "level": round(level, 3),
+          "max_rise_db": round(rise, 1), "video_cuts": video_cuts, "has_video": has_video, "activity_track": label,
+          **sparts, **parts}
+    return conf, detail, ev
+
+
+# ------------------------------------------------------------------ 换节奏：不重新分析
+
+
+def repace(plan: Plan, pace: str | float, output_id: str | None = None) -> int:
+    """把 cut 方案里各个停顿的保留长度改成新的 pace（tight / natural / relaxed 或秒数），不重新分析素材。返回改动的片段数。
+
+    依据：build 时，起点落在停顿里的片段都在 evidence.gap_span 记下这个停顿的 [起, 止]。同一个停顿涉及的片段
+    （左邻、停顿片段、右邻）在列表里相邻；按两侧的剪留，用和 build 相同的 _gap_layout 重新划分，再重算停顿片段的
+    把握度和说明。
+    - 人改过的片段（evidence.edited 或 locked）所在的停顿整段不动，人改过的片段本身也不动。
+    - 不变量：首尾相接（左邻的终点 = 停顿片段的起点 = …）；新剪口都在停顿 [起, 止] 之内，不越过说话。
+    - build 时剪口吸附在能量最低点；这里没有音频，用名义位置（与吸附位置相差不超过 SNAP_WINDOW）。
+      pace 没变（plan.options["keep_pause"] 相同）时什么都不改，所以重复调用是幂等的。
+    - 游戏实况里原来保留的短停顿，若换成更紧的 pace 要剪、而停顿附近有游戏动静，需要重新分析，跳过。
+    新的 pace 写进 plan.options（pace、keep_pause）。
+    """
+    if plan.recipe != "cut":
+        raise RecipeError(f"repace 只适用于 cut 配方的方案，这份方案是 {plan.recipe!r}")
+    keep = _pace_seconds(pace)
+    out = plan.output(output_id)
+    gaps = [s for s in out.segments if s.reason in ("silence", "pause", "idle", "action")]
+    if gaps and not any("gap_span" in s.evidence for s in gaps):
+        raise RecipeError("这份方案是旧版 cut 配方生成的，停顿片段里没有 evidence.gap_span，没法在原地改节奏；"
+                          f"请重新生成：autocut cut <素材> --pace {pace}")
+    old = plan.options.get("keep_pause")
+    plan.options["pace"] = pace
+    if isinstance(old, (int, float)) and abs(old - keep) < 1e-9:
+        log.info("repace：pace 没变（每个停顿留 %.2fs），不改", keep)
+        return 0
+    segs = out.segments
+    before = {s.id: (s.start, s.end, s.action, s.reason, s.confidence, s.detail) for s in segs}
+    skipped = 0
+    i = 0
+    while i < len(segs):
+        span = segs[i].evidence.get("gap_span")
+        if not span:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(segs) and segs[j + 1].source == segs[i].source and segs[j + 1].evidence.get("gap_span") == span:
+            j += 1
+        if not _repace_gap(segs, i, j, (float(span[0]), float(span[1])), keep):
+            skipped += 1
+        i = j + 1
+    plan.options["keep_pause"] = keep
+    plan.validate()
+    changed = sum(1 for s in segs if before.get(s.id) != (s.start, s.end, s.action, s.reason, s.confidence, s.detail))
+    log.info("repace → %s（每个停顿留 %.2fs）：改了 %d 个片段，跳过 %d 个人改过或需要重新分析的停顿",
+             pace, keep, changed, skipped)
+    return changed
+
+
+def _repace_gap(segs: list[Segment], i: int, j: int, span: tuple[float, float], keep: float) -> bool:
+    """重新划分一个停顿；segs[i..j] 是起点落在这个停顿里的片段。改了或无需改返回 True，跳过返回 False。"""
+    a, b = span
+    eps = 1e-6
+    src = segs[i].source
+    L = segs[i - 1] if i > 0 and segs[i - 1].source == src and abs(segs[i - 1].end - segs[i].start) < eps else None
+    run = segs[i: j + 1]
+    mids = [s for s in run if s.start >= a - eps and s.end <= b + eps]
+    if run[-1].end > b + eps:
+        R: Segment | None = run[-1]
+    else:
+        nxt = segs[j + 1] if j + 1 < len(segs) and segs[j + 1].source == src else None
+        R = nxt if nxt is not None and abs(nxt.start - run[-1].end) < eps else None
+    group = [s for s in (L, *run, R) if s is not None]
+    if any(s.locked or s.evidence.get("edited") for s in group):
+        return False
+    lk = "E" if L is None else ("K" if L.action == "keep" else "C")
+    rk = "E" if R is None else ("K" if R.action == "keep" else "C")
+    kind, x, y = _gap_layout(a, b, lk, rk, keep)
+    n = b - a
+    if kind == "fixed":
+        return True
+    if kind == "split":
+        if mids or L is None or R is None:
+            log.debug("repace 跳过 %.2f–%.2f：现有 %d 个停顿片段，新划分不需要", a, b, len(mids))
+            return False
+        L.end = R.start = round(x, 3)
+        return True
+    if not mids:
+        log.debug("repace 跳过 %.2f–%.2f：新划分需要停顿片段，但现在没有", a, b)
+        return False
+    first, last = mids[0], mids[-1]
+    if kind == "pause":
+        if len(mids) != 1 or first.reason not in ("pause", "silence", "idle"):
+            return False
+        conf, detail, ev = _pause_fields(n, keep, lk, rk)
+        first.start, first.end, first.action, first.reason = round(a, 3), round(b, 3), "keep", "pause"
+        first.confidence, first.detail = round(conf, 2), detail
+        for k in ("kept", "m", "f_context", "f_quiet", "q_audio", "f_video"):  # 剪停顿时的分项，不再适用
+            first.evidence.pop(k, None)
+        first.evidence.update(ev)
+    else:  # cut
+        if len(mids) == 1 and first.reason == "pause":
+            activity = first.evidence.get("activity")
+            if activity == "active":
+                log.info("repace 跳过 %.2f–%.2f：停顿附近有游戏动静，要剪需要重新分析", a, b)
+                return False
+            first.action, first.reason = "cut", "idle" if activity == "quiet" else "silence"
+        if first.end <= x + MIN_MID or last.start >= y - MIN_MID:
+            return False  # 游戏实况里多段的停顿：挪边界会把头尾那段挤没
+        first.start, last.end = round(x, 3), round(y, 3)
+        kept = (x - a if lk == "K" else 0.0) + (b - y if rk == "K" else 0.0)
+        for s in (first, last) if first is not last else (first,):
+            ev = s.evidence
+            if s.reason == "silence":
+                conf, detail, upd = _silence_fields(n, kept, keep, lk, rk, ev.get("context", "unknown"),
+                                                    float(ev.get("level", 0.0)))
+            elif s.reason == "idle":
+                conf, detail, upd = _idle_fields(n, s.end - s.start, kept, keep, lk, rk, ev.get("context", "unknown"),
+                                                 float(ev.get("level", 0.0)), ev.get("activity_track", "游戏音轨"),
+                                                 float(ev.get("max_rise_db", 0.0)), int(ev.get("video_cuts", 0)),
+                                                 bool(ev.get("has_video", True)))
+            else:
+                continue  # action：保留，说明里没有跟 pace 有关的数
+            s.confidence, s.detail = round(conf, 2), detail
+            ev.update(upd)
+    if L is not None:
+        L.end = first.start
+    if R is not None:
+        R.start = last.end
+    return True
 
 
 # ------------------------------------------------------------------ 每个素材
@@ -527,6 +858,7 @@ class _SourceCut:
         self.items: list[dict[str, Any]] = []  # 文字稿（含标点）
         self.ws: list[dict[str, Any]] = []  # 非标点词，带 "after"（后面跟的标点）
         self.activity: _Activity | None = None
+        self.sp: SpeechResult | None = None
 
     # ---- 主流程
     def run(self) -> list[Segment]:
@@ -534,8 +866,8 @@ class _SourceCut:
         m = self.media
         log.info("%s：分析用 %s，输出用 %s，游戏实况模式=%s", m.path.name, m.track_label(self.atrack),
                  m.track_label(self.out_track), self.game)
-        regions = [(float(s), min(float(e), self.duration)) for s, e in
-                   m.speech(self.atrack, min_silence=transcribe.SNAP_MIN_SILENCE).regions if s < self.duration]
+        self.sp = m.speech(self.atrack, min_silence=transcribe.SNAP_MIN_SILENCE)
+        regions = [(float(s), min(float(e), self.duration)) for s, e in self.sp.regions if s < self.duration]
         self.db = frame_db(m.audio(self.atrack), SR, HOP, 0.025)
         t1 = time.perf_counter()
         self._load_words()
@@ -709,10 +1041,12 @@ class _SourceCut:
         best = cand[np.argmin(np.abs((i0 + cand) * HOP - t))]
         return float((i0 + best) * HOP)
 
-    def _snap_in_gap(self, t: float, a: float, b: float) -> float:
+    def _snap_in_gap(self, t: float, a: float, b: float, direction: int = 0) -> float:
+        """停顿里的剪口吸附到能量最低点。direction=+1 只往后找、-1 只往前找：保留一侧的停顿只会变长，
+        不会因为吸附比 pace 短（剪口离说话更远，A1/A2）。"""
         guard = min(GUARD, (b - a) / 4)
-        w = min(SNAP_WINDOW, max(0.02, self.keep / 4))  # 紧凑节奏下吸附不能把保留的停顿吃掉太多
-        return self._snap(t, a + guard, b - guard, w, w)
+        w = SNAP_WINDOW
+        return self._snap(t, a + guard, b - guard, w if direction <= 0 else 0.0, w if direction >= 0 else 0.0)
 
     def _snap_between_words(self, w0: dict[str, Any], w1: dict[str, Any]) -> float:
         lo = (w0["start"] + w0["end"]) / 2 + HOP
@@ -746,59 +1080,70 @@ class _SourceCut:
         return [p for p in pieces if p.end - p.start > 1e-6]
 
     def _gap_pieces(self, gi: int, L: _Unit | None, R: _Unit | None, a: float, b: float) -> list[_Piece]:
-        """停顿 [a, b] 两侧是单元 L、R（None = 素材开头/结尾）。按两侧剪留决定停顿怎么分。"""
-        n = b - a
-        half = self.keep / 2
-        hL = (min(half, n / 2) if R is not None else min(half, n)) if L is not None else 0.0
-        hR = (min(half, n / 2) if L is not None else min(half, n)) if R is not None else 0.0
-        lk = L is not None and L.kept
-        rk = R is not None and R.kept
-        mid = n - hL - hR  # 用名义位置做决定，吸附只微调剪口
-        m0 = a + hL if L is None else self._snap_in_gap(a + hL, a, b)
-        m1 = b - hR if R is None else self._snap_in_gap(b - hR, a, b)
-        if m1 - m0 < 0.5 * mid:  # 吸附把中间挤没了：退回名义位置
-            m0, m1 = a + hL, b - hR
-        gL = L.group if L is not None else None
-        gR = R.group if R is not None else None
-        edge = L is None or R is None
-        if (lk or rk) and mid > SLACK and ((lk and rk) or edge or mid >= SPLIT_SILENCE_MIN):
-            out = []
-            if L is not None:
-                out.append(self._glue(L, a, m0))
-            out += self._middle(gi, a, b, m0, m1, edge="start" if L is None else "end" if R is None else None)
+        """停顿 [a, b] 两侧是单元 L、R（None = 素材开头/结尾）。划分规则见 _gap_layout，这里只负责吸附剪口、打分。"""
+        lk, rk = _side(L), _side(R)
+        kind, x, y = _gap_layout(a, b, lk, rk, self.keep)
+        span = [round(a, 3), round(b, 3)]
+        if kind == "cut":
+            m0 = x if L is None else self._snap_in_gap(x, a, b, +1 if lk == "K" else 0)
+            m1 = y if R is None else self._snap_in_gap(y, a, b, -1 if rk == "K" else 0)
+            if m1 - m0 < 0.5 * (y - x):  # 吸附把中间挤没了：退回名义位置
+                m0, m1 = x, y
+            out = [self._glue(L, a, m0, span)] if L is not None else []
+            out += self._middle(gi, a, b, m0, m1, lk, rk, self._gap_context(a, b, L, lk, rk), span)
             if R is not None:
-                out.append(self._glue(R, m1, b))
+                out.append(self._glue(R, m1, b, span))
             return out
-        if lk and rk:
-            if n >= PAUSE_SEG_MIN:
-                return [_Piece(a, b, "keep", "pause", 0.9,
-                               f"停顿 {_sec(n)}，不超过 {_sec(self.keep + SLACK)}，保留", ("pause", gi), {"gap": _rnd(n)})]
-            t = self._snap_in_gap((a + b) / 2, a, b) if gL != gR else b
-            return [self._glue(L, a, t), self._glue(R, t, b)]
-        if L is None or R is None:  # 素材开头/结尾的短静音：跟着唯一的邻居
-            return [self._glue(L or R, a, b)]
-        if lk:  # 左留右剪：左边留 hL，其余并进右边那一刀
-            return [self._glue(L, a, m0), self._glue(R, m0, b)]
-        if rk:  # 左剪右留
-            return [self._glue(L, a, m1), self._glue(R, m1, b)]
-        if gL == gR:
-            return [self._glue(L, a, b)]
+        if kind == "pause":
+            conf, detail, ev = _pause_fields(b - a, self.keep, lk, rk)
+            ev.update(self._gap_context(a, b, L, lk, rk), gap_span=span)
+            if self.activity is not None:  # repace 换成更紧的 pace 时，要知道这里有没有游戏动静
+                ev.update(self._activity_evidence(a, b))
+            return [_Piece(a, b, "keep", "pause", conf, detail, ("pause", gi), ev)]
+        if kind == "split":
+            t = self._snap_in_gap(x, a, b, +1 if lk == "K" else -1)
+            return [self._glue(L, a, t, span), self._glue(R, t, b, span)]
+        # fixed：和 pace 无关
+        if L is None or R is None:
+            return [self._glue(L or R, a, b, span)]
+        if L.group == R.group:
+            return [self._glue(L, a, b, span)]
         t = self._snap_in_gap((a + b) / 2, a, b)
-        return [self._glue(L, a, t), self._glue(R, t, b)]
+        return [self._glue(L, a, t, span), self._glue(R, t, b, span)]
 
-    def _glue(self, u: _Unit, a: float, b: float) -> _Piece:
+    def _glue(self, u: _Unit | None, a: float, b: float, span: list[float]) -> _Piece:
+        assert u is not None
         p = self._unit_piece(u)
         p.start, p.end, p.text = a, b, ""
+        p.evidence["gap_span"] = span  # 片段的起点若落在这里，repace 据此找到这个停顿
         return p
 
-    def _middle(self, gi: int, a: float, b: float, m0: float, m1: float, edge: str | None) -> list[_Piece]:
+    def _gap_context(self, a: float, b: float, L: _Unit | None, lk: str, rk: str) -> dict[str, Any]:
+        """停顿的上下文（算把握度用）：前一个词后面是什么标点；停顿里最响处离语音阈值多近。"""
+        if "E" in (lk, rk):
+            ctx = "edge"
+        elif not self.ws or L is None or not L.words:
+            ctx = "unknown"
+        else:
+            after = self.ws[L.words[-1]]["after"]
+            ctx = ("question" if any(c in _QUESTION for c in after)
+                   else "sentence_end" if any(c in _SENTENCE_END for c in after) else "mid_sentence")
+        i0, i1 = int(math.ceil((a + 0.05) / HOP)), int((b - 0.05) / HOP)
+        level = 0.0
+        if self.sp is not None and i1 > i0:
+            span_db = float(self.sp.threshold_db - self.sp.noise_floor_db)
+            p95 = float(np.percentile(self.db[i0: i1 + 1], 95))
+            level = max(0.0, (p95 - self.sp.noise_floor_db) / span_db) if span_db > 0 else 0.0
+        return {"context": ctx, "level": round(level, 3)}
+
+    def _middle(self, gi: int, a: float, b: float, m0: float, m1: float, lk: str, rk: str, ctx: dict[str, Any],
+                span: list[float]) -> list[_Piece]:
         """停顿中间要剪的部分 [m0, m1]：普通素材 → silence；游戏实况 → 有动静的保留（action），其余 idle。"""
-        n, kept = b - a, (m0 - a) + (b - m1)
-        ev = {"gap": _rnd(n), "kept": _rnd(kept)}
-        what = {"start": "开头静音", "end": "结尾静音"}.get(edge or "", "停顿")
+        n = b - a
+        kept = (m0 - a if lk == "K" else 0.0) + (b - m1 if rk == "K" else 0.0)
         if self.activity is None:
-            conf = 0.95 if n >= 1.0 else 0.85
-            return [_Piece(m0, m1, "cut", "silence", conf, f"{what} {_sec(n)} → 保留 {_sec(kept)}", ("gap", gi), ev)]
+            conf, detail, ev = _silence_fields(n, kept, self.keep, lk, rk, ctx["context"], ctx["level"])
+            return [_Piece(m0, m1, "cut", "silence", conf, detail, ("gap", gi), {**ev, "gap_span": span})]
         act = self.activity
         spans = act.active_in(m0, m1)
         # 看点之间、看点与两端之间不到 IDLE_MIN 的空闲并进看点
@@ -816,38 +1161,43 @@ class _SourceCut:
             t = e
         if chunks and m1 - chunks[-1][1] < IDLE_MIN:
             chunks[-1][1] = m1
+        what = _what(lk, rk)
         out: list[_Piece] = []
         t = m0
         for k, (s, e, aevs) in enumerate(chunks):
             if s > t:
-                out.append(self._idle(gi, k, t, s, n, kept, what))
+                out.append(self._idle(gi, k, t, s, n, kept, lk, rk, ctx, span))
             bursts = [x for aev in aevs for x in aev["bursts"]]
             vcuts = sum(aev["video_cuts"] for aev in aevs)
+            rise = max((x[2] for x in bursts), default=None)
             parts = []
             if bursts:
                 lo, hi = min(x[0] for x in bursts), max(x[1] for x in bursts)
-                parts.append(f"{act.label}在 {_ts(lo)}–{_ts(hi)} 有 {len(bursts)} 次响度爆发"
-                             f"（最多比中位数高 {max(x[2] for x in bursts):.0f} dB）")
+                parts.append(f"{act.label}在 {_ts(lo)}–{_ts(hi)} 有 {len(bursts)} 次响度爆发（最多比中位数高 {rise:.0f} dB）")
             if vcuts:
                 parts.append(f"画面切换 {vcuts} 次")
-            conf = 0.75 if bursts and vcuts else 0.7 if bursts else 0.6
-            out.append(_Piece(s, e, "keep", "action", conf, f"人声停顿 {_sec(n)}，但" + "，".join(parts) + " → 保留",
-                              ("gap", gi, "act", k), {**ev, "bursts": bursts, "video_cuts": vcuts}))
+            conf, cparts = action_confidence(rise, vcuts)
+            out.append(_Piece(s, e, "keep", "action", conf, f"人声{what} {_sec(n)}，但" + "，".join(parts) + " → 保留",
+                              ("gap", gi, "act", k),
+                              {"gap": _rnd(n), "bursts": bursts, "video_cuts": vcuts, "gap_span": span, **cparts}))
             t = e
         if t < m1:
-            out.append(self._idle(gi, len(chunks), t, m1, n, kept, what))
+            out.append(self._idle(gi, len(chunks), t, m1, n, kept, lk, rk, ctx, span))
         return out
 
-    def _idle(self, gi: int, k: int, s: float, e: float, n: float, kept: float, what: str) -> _Piece:
+    def _idle(self, gi: int, k: int, s: float, e: float, n: float, kept: float, lk: str, rk: str,
+              ctx: dict[str, Any], span: list[float]) -> _Piece:
+        ev = self._activity_evidence(s, e)
+        conf, detail, fields = _idle_fields(n, e - s, kept, self.keep, lk, rk, ctx["context"], ctx["level"],
+                                            ev["activity_track"], ev["max_rise_db"], ev["video_cuts"], ev["has_video"])
+        return _Piece(s, e, "cut", "idle", conf, detail, ("gap", gi, "idle", k), {**fields, "gap_span": span})
+
+    def _activity_evidence(self, s: float, e: float) -> dict[str, Any]:
         act = self.activity
         assert act is not None
-        rise = act.max_rise(s, e)
-        vc = sum(1 for c in act.video_cuts if s <= c <= e)
-        video = f"画面切换 {vc} 次（零星切换不算看点）" if vc else "画面没有切换"
-        detail = f"{what} {_sec(n)} 没人说话，{act.label}平稳（最多比中位数高 {rise:.0f} dB），{video} → 剪掉 {_sec(e - s)}"
-        conf = 0.8 if vc == 0 else 0.7
-        return _Piece(s, e, "cut", "idle", conf, detail, ("gap", gi, "idle", k),
-                      {"gap": _rnd(n), "kept": _rnd(kept), "max_rise_db": round(rise, 1), "video_cuts": vc})
+        return {"activity": "active" if act.active_in(s, e) else "quiet", "activity_track": act.label,
+                "max_rise_db": round(act.max_rise(s, e), 1), "video_cuts": sum(1 for c in act.video_cuts if s <= c <= e),
+                "has_video": self.media.info.video is not None}
 
     def _merge(self, pieces: list[_Piece]) -> list[_Piece]:
         out: list[_Piece] = []
@@ -863,8 +1213,6 @@ class _SourceCut:
                 p.text = self._text_between(p.start, p.end) or p.text
             elif p.reason in ("retake", "filler"):
                 p.text = p.text or self._text_between(p.start, p.end)
-            if p.reason == "speech" and p.detail == "说话":
-                p.detail = f"说话 {_sec(p.end - p.start)}"
         return out
 
     def _text_between(self, a: float, b: float) -> str:
@@ -930,6 +1278,11 @@ class _SourceCut:
                  [(round(s, 2), round(e, 2), round(r, 1)) for s, e, r in bursts], len(cuts), len(clusters),
                  time.perf_counter() - t0)
         return _Activity(label, base, db, bursts, cuts, clusters)
+
+
+def _side(u: _Unit | None) -> str:
+    """停顿一侧是什么："K" 保留的话、"C" 剪掉的话、"E" 素材头尾。"""
+    return "E" if u is None else "K" if u.kept else "C"
 
 
 def _short(text: str, n: int = 14) -> str:

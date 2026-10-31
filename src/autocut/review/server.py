@@ -12,10 +12,13 @@
   GET  /media/<source_id>        素材文件，支持 Range
   GET  /api/words/<source_id>    逐词文字稿（只读缓存，不触发识别）
   GET  /api/peaks/<source_id>?per_sec=50   波形峰值
-  POST /api/render               {"output_ids"?: [...]} → {"job": id}
+  POST /api/render               {"output_ids"?: [...], "options"?: {"loudnorm": null|false|true|LUFS}} → {"job": id}
   GET  /api/jobs/<id>            进度/结果；POST /api/jobs/<id>/cancel 取消
   POST /api/check                {"output_id"?: ...} → 体检报告
   POST /api/export               {"format": "fcpxml|xmeml|edl|srt|markers", "output_id"?: ...}
+  POST /api/repace               {"pace": "tight|natural|relaxed|秒", "revision": N, "etag"?: "...", "output_id"?: ...}：
+                                 在页面里改节奏（调用 recipes.cut.repace，跳过人改过/锁定的片段），保存并返回新方案
+  GET  /api/captions?output=ID   字幕条目（成片时间轴上的 {start,end,text}），预览叠加字幕用
   POST /api/relocate             {"source": id, "path": "...", "revision": N}：重新定位丢失的素材
   POST /api/reveal               {"path": "..."}：在 Finder 里显示本次生成的文件
 """
@@ -53,7 +56,7 @@ _MAX_BODY = 64 * 1024 * 1024
 _CHUNK = 256 * 1024
 _STATIC_SUFFIXES = {".html", ".js", ".css", ".svg", ".png", ".ico", ".json", ".woff2"}
 _PATH_KEYS = {"path", "paths", "srt_path", "output", "outputs", "file", "files", "out", "out_path"}
-_MODULE_LABEL = {"autocut.render": "出片", "autocut.check": "体检", "autocut.export": "导出"}
+_MODULE_LABEL = {"autocut.render": "出片", "autocut.check": "体检", "autocut.export": "导出", "autocut.recipes.cut": "节奏", "autocut.captions": "字幕"}
 
 
 class ApiError(Exception):
@@ -242,6 +245,8 @@ class Job:
 class ReviewServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    # 默认的监听队列只有 5：页面一次并行请求十几个模块/接口时，多出来的连接会被直接重置（ERR_CONNECTION_RESET），页面白屏
+    request_queue_size = 128
 
     def __init__(self, plan_path: str | Path, host: str = "127.0.0.1", port: int = 0) -> None:
         if host not in _LOOPBACK:
@@ -324,7 +329,11 @@ class ReviewServer(ThreadingHTTPServer):
             "name": self.plan_path.name,
             "path": str(self.plan_path),
             "sources": {sid: self.source_info(plan, sid) for sid in plan.sources},
-            "capabilities": {k: _module_available(m) for k, m in (("render", "autocut.render"), ("check", "autocut.check"), ("export", "autocut.export"))},
+            "capabilities": {
+                **{k: _module_available(m) for k, m in (("render", "autocut.render"), ("check", "autocut.check"), ("export", "autocut.export"))},
+                "repace": _has_attr("autocut.recipes.cut", "repace"),
+                "captions": _has_attr("autocut.captions", "cues_for"),
+            },
             "formats": list(EXPORT_FORMATS),
         }
 
@@ -352,6 +361,25 @@ class ReviewServer(ThreadingHTTPServer):
             log.debug("查找 %s 的文字稿缓存失败", sid, exc_info=True)
             return None
 
+    def words_ready(self, plan: Plan, sid: str) -> bool:
+        """字幕模块能直接读到文字稿（不触发识别）：Source.words 指向存在的文件，或者默认参数的识别缓存已经有了。"""
+        s = plan.sources[sid]
+        if s.words:
+            p = Path(s.words)
+            if not p.is_absolute():
+                p = self.plan_path.parent / p
+            if p.is_file():
+                return True
+        src = plan.source_path(sid)
+        if not src.is_file():
+            return False
+        try:
+            from autocut.analysis import Media
+
+            return Media(src).words_cache_path() is not None
+        except Exception:  # noqa: BLE001
+            return False
+
     def peak_lock(self, sid: str, per_sec: int) -> threading.Lock:
         with self.jobs_lock:
             return self._peak_locks.setdefault((sid, per_sec), threading.Lock())
@@ -369,6 +397,14 @@ def _module_available(name: str) -> bool:
 
         return importlib.util.find_spec(name) is not None
     except (ImportError, ValueError):
+        return False
+
+
+def _has_attr(name: str, attr: str) -> bool:
+    """模块能 import 并且有这个函数（别人的模块还在演进，页面据此决定按钮是否可用）。"""
+    try:
+        return hasattr(importlib.import_module(name), attr)
+    except Exception:  # noqa: BLE001 —— 导入失败就是“不可用”
         return False
 
 
@@ -426,6 +462,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             ("POST", r"/api/render", self.post_render),
             ("GET", r"/api/jobs/([^/]+)", self.get_job),
             ("POST", r"/api/jobs/([^/]+)/cancel", self.cancel_job),
+            ("POST", r"/api/repace", self.post_repace),
+            ("GET", r"/api/captions", self.get_captions),
             ("POST", r"/api/check", self.post_check),
             ("POST", r"/api/export", self.post_export),
             ("POST", r"/api/relocate", self.post_relocate),
@@ -699,13 +737,22 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 plan.output(i)
         except PlanError as e:
             raise ApiError(HTTPStatus.BAD_REQUEST, str(e)) from None
+        opts = body.get("options") or {}
+        if not isinstance(opts, dict):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "options 应该是对象，例如 {\"loudnorm\": -14}")
+        render_kw: dict[str, Any] = {}
+        if "loudnorm" in opts and opts["loudnorm"] is not None:  # None = 听 render 的默认（竖屏标准化、横屏不做）
+            ln = opts["loudnorm"]
+            if not isinstance(ln, (bool, int, float)):
+                raise ApiError(HTTPStatus.BAD_REQUEST, f"loudnorm 应该是 true/false 或目标 LUFS 数字，收到 {ln!r}")
+            render_kw["loudnorm"] = ln
         job = Job("render")
         self.server.add_job(job)
-        log.info("出片任务 %s 开始：%s", job.id, ids)
-        threading.Thread(target=self._run_render, args=(job, render, plan, ids), name=f"render-{job.id}", daemon=True).start()
+        log.info("出片任务 %s 开始：%s %s", job.id, ids, render_kw or "")
+        threading.Thread(target=self._run_render, args=(job, render, plan, ids, render_kw), name=f"render-{job.id}", daemon=True).start()
         self.send_json(202, {"job": job.id})
 
-    def _run_render(self, job: Job, render: Callable[..., Any], plan: Plan, ids: list[str]) -> None:
+    def _run_render(self, job: Job, render: Callable[..., Any], plan: Plan, ids: list[str], render_kw: dict[str, Any] | None = None) -> None:
         def progress(*args: Any, **kw: Any) -> None:
             if job.cancel.is_set():
                 raise JobCancelled("已取消")  # render 不会吞掉它，ffmpeg 的半成品由 render 的 finally 清理
@@ -714,7 +761,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
         job.total = len(ids)
         try:
-            result = _call_flex(render, plan, output_ids=ids, progress=progress, cancel=job.cancel)
+            result = _call_flex(render, plan, output_ids=ids, progress=progress, cancel=job.cancel, **(render_kw or {}))
             job.result = _slim(_jsonify(result))
             self.server.known_files.update(_file_paths(job.result))
             job.fraction = 1.0
@@ -749,6 +796,62 @@ class ReviewHandler(BaseHTTPRequestHandler):
             job.cancel.set()
             job.stage = "正在取消…"
         self.send_json(200, job.to_dict())
+
+    def post_repace(self) -> None:
+        """改节奏：跳过人改过/锁定的片段，其余按新的 pace 重新划分保留和剪掉；和 PUT 一样先校验 revision，然后保存。"""
+        body = self.read_json()
+        pace = body.get("pace")
+        if isinstance(pace, bool) or not isinstance(pace, (str, int, float)) or pace == "":
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"pace 应该是 tight / natural / relaxed 或每个停顿保留的秒数，收到 {pace!r}")
+        repace = _import_feature("autocut.recipes.cut", "repace")
+        output_id = body.get("output_id")
+        with self.server.plan_lock:
+            plan, _ = self._check_conflict(body.get("revision"), body.get("etag"))
+            before = plan.to_dict()
+            try:
+                changed = int(_call_flex(repace, plan, pace, output_id=output_id) or 0)
+            except (PlanError, ValueError) as e:
+                raise ApiError(HTTPStatus.BAD_REQUEST, str(e), code="invalid_pace") from None
+            mod = sys.modules.get("autocut.recipes.cut")
+            paces = getattr(mod, "PACES", {}) or {}
+            plan.options["pace"] = pace
+            if isinstance(pace, str) and pace.strip().lower() in paces:
+                plan.options["keep_pause"] = paces[pace.strip().lower()]
+            elif isinstance(pace, (int, float)):
+                plan.options["keep_pause"] = float(pace)
+            try:
+                plan.validate()
+            except PlanError as e:  # repace 的 bug：不能把不合法的方案写盘
+                log.error("repace 产生了不合法的方案：%s", e)
+                raise ApiError(HTTPStatus.INTERNAL_SERVER_ERROR, f"改节奏产生了不合法的方案，没有保存：{e}", code="repace_invalid") from None
+            if plan.to_dict() != before:
+                plan.save()
+            saved, etag = self.server.read_plan(fresh=True)
+        log.info("改节奏 %s：%d 个片段变了（revision → %d）", pace, changed, saved.revision)
+        self.send_json(200, {"changed": changed, "pace": pace, "revision": saved.revision, "etag": etag, "plan": saved.to_dict(), "summary": saved.summary()})
+
+    def get_captions(self) -> None:
+        """成片时间轴上的字幕条目。没有逐词文字稿就不调用 cues_for（它会在没有缓存时触发语音识别，页面加载时不该等那么久）。"""
+        cues_for = _import_feature("autocut.captions", "cues_for")
+        plan = self._fresh_plan()
+        try:
+            output = plan.output(self.query.get("output", [None])[0])
+        except PlanError as e:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(e)) from None
+        sids = {s.source for s in output.kept()}
+        ready = bool(sids) and all(self.server.words_ready(plan, sid) for sid in sids)
+        cues: list[dict[str, Any]] = []
+        if ready:
+            try:
+                cues = [{"start": round(c.start, 3), "end": round(c.end, 3), "text": c.text} for c in cues_for(plan, output)]
+            except Exception as e:  # noqa: BLE001
+                log.warning("生成字幕失败", exc_info=True)
+                raise ApiError(HTTPStatus.INTERNAL_SERVER_ERROR, f"生成字幕出错：{type(e).__name__}: {e}") from None
+        self.send_json(200, {
+            "output": output.id, "cues": cues, "has_words": ready,
+            "enabled": output.captions.enabled, "burn": output.captions.burn,
+            "reason": None if ready else "没有逐词文字稿，生成不了字幕。装好语音识别模型后重新运行 autocut cut 就会有。",
+        })
 
     def post_check(self) -> None:
         body = self.read_json()

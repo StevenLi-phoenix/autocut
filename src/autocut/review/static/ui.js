@@ -75,6 +75,7 @@ export function menu(button, getItems) {
     if (pop) return close();
     pop = h("div", { class: "menu", role: "menu", "aria-label": button.getAttribute("aria-label") || button.textContent });
     for (const it of getItems()) {
+      if (it.note) { pop.append(h("div", { class: "menu-note", role: "none" }, it.note)); continue; }
       const b = h("button", {
         class: "menu-item", role: "menuitem", disabled: !!it.disabled, tabindex: -1,
         onclick: () => { close(false); it.onselect(); },
