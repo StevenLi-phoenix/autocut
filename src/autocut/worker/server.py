@@ -111,6 +111,18 @@ class App:
             if not fn:
                 raise PolicyError("no_such_pipeline", f"没有这个流水线：{sub[1]}", f"可用：{'、'.join(sorted(self.pipelines)) or '（暂无）'}")
             return 200, {"ok": True, "run": fn(self, job_id, body)}
+        if sub == ["preview"] and method == "POST":  # 重新压预览（微信上传超时时用更小的）
+            mib = float(body.get("max_mib", 4))
+            st = delivery.state(self.store, job_id)
+            out = []
+            for dv in delivery.live(st):
+                final = policy.inside(d, dv["final"])
+                dst = d / "out" / f"preview-{int(mib * 10)}-{final.stem}.mp4"
+                prev = delivery.make_preview(final, dst, max_bytes=int(mib * 1024 * 1024))
+                dv["preview"] = str(dst.relative_to(d))
+                out.append({"id": dv["id"], "preview": dv["preview"], "bytes": prev["bytes"], "video_kbps": prev["video_kbps"]})
+            delivery._save(self.store, job_id, st, "preview_resized", max_mib=mib)
+            return 200, {"ok": True, "previews": out}
         if sub == ["state"]:
             return 200, {"ok": True, "state": delivery.state(self.store, job_id)}
         if sub == ["confirm"] and method == "POST":

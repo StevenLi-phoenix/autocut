@@ -644,3 +644,16 @@ def test_kaorou_unreachable_is_reported(app: App) -> None:
     with pytest.raises(PolicyError) as e:
         delivery.handoff(app.store, job, "kaorou", "t", "", app.cfg.root, kaorou={"tags": ["x"], "api": "http://127.0.0.1:9"})
     assert e.value.code == "kaorou_unreachable"
+
+
+def test_preview_endpoint_resizes_live_previews(http: Any, app: App, tmp_path: Path) -> None:
+    import subprocess as sp
+
+    job = app.store.create_job("t", {})["id"]
+    d = app.store.job_dir(job)
+    (d / "out").mkdir(exist_ok=True)
+    sp.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=d=20:s=640x360:r=25", "-f", "lavfi", "-i", "sine=d=20", "-c:v", "libx264", "-b:v", "1500k", "-c:a", "aac", str(d / "out" / "a.mp4")], check=True)
+    delivery.mark_awaiting(app.store, job, [{"id": "main", "final": "out/a.mp4", "preview": "out/p.mp4", "role": "main"}], "s")
+    code, b, _ = http("POST", f"/v1/jobs/{job}/preview", {"max_mib": 0.5})
+    assert code == 200 and b["previews"][0]["bytes"] <= 0.5 * 1024 * 1024 + 2 * 2**20
+    assert delivery.state(app.store, job)["deliverables"][0]["preview"].startswith("out/preview-5-")
