@@ -160,3 +160,102 @@ def test_commentary_pipeline_end_to_end_with_fakes(app: App, media: Path, tmp_pa
     assert any(p == "script" and "画面1" in m[0]["content"] for p, m in gw.calls)
     # 成片音频里解说确实混进去了：有 srt 字幕
     assert (d / "out" / "game.commentary.srt").exists() or any(x.endswith(".srt") for x in dv["extras"])
+
+
+# ------------------------------------------------------------------ clips（假 LLM，真 ASR / 切点 / render）
+
+
+class _ClipsGW:
+    """提名：把文字稿每 3 句分一组；评审：第 2 个候选故意给 standalone=2（应被淘汰）；QA 全过。"""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.seen_review_text: list[str] = []
+        self.nominate_prompt = ""
+
+    def chat_json(self, model, messages, *, purpose, validate=None, **kw):
+        import re  # noqa: PLC0415
+
+        self.calls.append(purpose)
+        if purpose == "nominate":
+            text = messages[0]["content"]
+            self.nominate_prompt = text
+            ids = re.findall(r"^\[(s\d{4}) ", text, re.M)
+            out = {"candidates": [{"first": ids[i], "last": ids[min(i + 2, len(ids) - 1)], "title": f"片段{i // 3 + 1}", "hook": "h", "reason": f"理由{i // 3 + 1}", "confidence": 0.8}
+                                  for i in range(0, len(ids) - 2, 3)]}
+        elif purpose == "review":
+            n = self.calls.count("review")
+            self.seen_review_text.append(messages[0]["content"])
+            out = {"hook": 4, "standalone": 2 if n == 2 else 4, "arc": 4, "density": 4, "safety": 5, "fit": 4, "problems": ["开头悬空指代"] if n == 2 else []}
+        elif purpose == "qa":
+            out = {"black": False, "frozen": False, "caption_overflow": False, "subject_cropped": False, "note": "ok"}
+        else:
+            out = {}
+        if validate:
+            validate(out)
+        return out
+
+    def spent_cny(self) -> float:
+        return 0.2
+
+
+def test_clips_pipeline_funnel_and_review_gate(app: App, media: Path, tmp_path: Path) -> None:
+    import subprocess  # noqa: PLC0415
+
+    from autocut.worker import pipe_clips  # noqa: PLC0415
+    from autocut.worker.pipeline import start  # noqa: PLC0415
+
+    job = app.store.create_job("clips", {"purpose": "找讲得最清楚的片段", "budget_cny": 2.0, "attribution": {"repost_label": True}})["id"]
+    d = app.store.job_dir(job)
+    lst = tmp_path / "l.txt"
+    lst.write_text("".join(f"file '{media / 'lecture_en.mp4'}'\n" for _ in range(4)))
+    subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(d / "src" / "long.mp4")], check=True)
+    ingest.register_source(app.store, job, {"kind": "url", "file": "src/long.mp4", "url": "https://example.com/long", "title": "长课", "channel": "某人"})
+    gw = _ClipsGW()
+    run = start(app, job, "clips", {"n": 2, "length": [8, 40], "extra": 1, "lang": "en"}, lambda c: pipe_clips.run_clips(c, gateway=gw))
+    r = wait(app, job, run["id"], 900)
+    assert r["status"] == "ok", r.get("result")
+    res = r["result"]
+    f = res["funnel"]
+    assert f["nominated"] >= 3 and f["review_ok"] == f["hard_ok"] - 1 and f["delivered"] >= 1  # 被评审淘汰了恰好一条
+    assert "宁缺毋滥" not in res["summary"]
+    mains = [x for x in res["deliverables"] if x["role"] == "main"]
+    assert 1 <= len(mains) <= 2
+    for dv in res["deliverables"]:
+        assert (d / dv["final"]).stat().st_size > 5_000 and (d / dv["preview"]).stat().st_size <= delivery.PREVIEW_MAX_BYTES
+        assert dv["range"][1] > dv["range"][0] and dv["title"]
+    plan = json.loads((d / "work" / "long.clips.r1.autocut.json").read_text())
+    assert all(o["captions"]["burn"] and o["width"] == 1080 and o["height"] == 1920 for o in plan["outputs"])
+    # 独立评审只看到文字稿，看不到提名理由
+    assert gw.seen_review_text and not any("理由" in t for t in gw.seen_review_text)
+    assert "转载自 某人《长课》" in res["summary"]
+    st = delivery.state(app.store, job)
+    assert st["status"] == "awaiting_confirmation" and len(st["deliverables"]) == len(res["deliverables"])
+    # 拒绝其中一条 → 禁区 + 补做，且被拒区间不会再被选
+    victim = mains[0]
+    delivery.reject(app.store, job, "boring", "没意思", [victim["id"]])
+    rc = delivery.rejection_context(app.store, job)
+    assert rc["zones"] == [tuple(victim["range"])]
+    gw2 = _ClipsGW()
+    run2 = start(app, job, "clips", {"n": 2, "length": [8, 40], "extra": 0, "lang": "en"}, lambda c: pipe_clips.run_clips(c, gateway=gw2))
+    r2 = wait(app, job, run2["id"], 900)
+    assert r2["status"] == "ok", r2.get("result")
+    assert "没意思" in gw2.nominate_prompt and "boring" in gw2.nominate_prompt  # 反馈进了下一轮提示
+    st2 = delivery.state(app.store, job)
+    assert victim["id"] not in [x["id"] for x in delivery.live(st2)]
+    new = [x for x in delivery.live(st2) if x["id"].startswith("r2_")]
+    for x in new:  # 新选的段和被拒区间不重叠
+        a, b = x["range"]
+        assert not (a < victim["range"][1] and victim["range"][0] < b)
+
+
+def test_clips_pipeline_stops_after_three_rejection_rounds(app: App) -> None:
+    from autocut.worker import pipe_clips  # noqa: PLC0415
+    from autocut.worker.pipeline import start  # noqa: PLC0415
+
+    job = app.store.create_job("clips", {})["id"]
+    ingest.register_source(app.store, job, {"kind": "upload", "file": "src/x.mp4"})
+    (app.store.job_dir(job) / "rejections.json").write_text(json.dumps({"items": [{"reason": "boring", "text": "", "outputs": [], "zones": []}] * 3}))
+    run = start(app, job, "clips", {}, lambda c: pipe_clips.run_clips(c, gateway=_ClipsGW()))
+    r = wait(app, job, run["id"], 30)
+    assert r["status"] == "failed" and r["result"]["error"]["code"] == "too_many_rounds" and "更明确" in r["result"]["error"]["fix"]
