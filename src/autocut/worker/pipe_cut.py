@@ -59,6 +59,50 @@ def guard_mid_sentence(plan_path: Path) -> dict[str, Any]:
     return {"restored": n, "seconds": round(secs, 1)}
 
 
+def seams_to_restore(plan: Any, times: list[float]) -> list[str]:
+    """确定性吸附：核验报告里落在说话中间的接缝（成片时间）→ 该接缝处被剪掉的片段 id。把它们改回保留，接缝就消失了。"""
+    out = plan.output()
+    segs = out.segments
+    tl = out.timeline()
+    kept_pos = {s.id: i for i, s in enumerate(segs)}
+    ids: list[str] = []
+    for t in times:
+        k = min(range(len(tl)), key=lambda j: abs(tl[j][1] - t)) if tl else None
+        if k is None or k == 0:
+            continue
+        a, b = kept_pos[tl[k - 1][0].id], kept_pos[tl[k][0].id]
+        ids += [x.id for x in segs[a + 1:b] if x.action == "cut"]  # 两个相邻保留片段之间被剪掉的那几段
+    return list(dict.fromkeys(ids))
+
+
+def heal_seams(ctx: Ctx, plan_rel: str, out_dir: str, loudnorm: str, rounds: int = 3) -> tuple[dict[str, Any], list[str]]:
+    """渲染 → 核验 → 把落在说话中间的接缝处的剪法改回保留 → 重渲，最多 rounds 轮。不放宽核验：剩下的接缝如实报告。返回 (最后一次 render 结果, 被恢复的片段 id)。"""
+    from autocut.plan import Plan  # noqa: PLC0415
+
+    healed: list[str] = []
+    ren: dict[str, Any] = {}
+    for r in range(rounds + 1):
+        ctx.stage("render" if r == 0 else f"render-heal{r}", "出片并核验接缝" if r == 0 else f"第 {r} 轮：{len(healed)} 处剪法改回保留后重渲")
+        ren = ctx.autocut("render", [plan_rel, "--out-dir", out_dir, "--force", "--loudnorm", loudnorm])
+        v = ((ren.get("results") or [{}])[0].get("verify") or {})
+        times = [float(t) for t in (v.get("mid_speech_at") or [])]
+        if not times or r == rounds:
+            break
+        plan = Plan.load(ctx.path(plan_rel))
+        ids = [i for i in seams_to_restore(plan, times) if i not in healed]
+        if not ids:
+            break
+        for seg in plan.output().segments:
+            if seg.id in ids:
+                seg.action = "keep"
+                seg.detail = f"{seg.detail}（接缝落在说话中间，确定性吸附：改为保留）".strip()
+                seg.evidence["seam_healed"] = True
+        healed += ids
+        plan.notes.append(f"核验发现 {len(times)} 个接缝落在说话中间：把接缝处被剪掉的 {len(ids)} 个片段改回保留（第 {r + 1} 轮）")
+        plan.save()
+    return ren, healed
+
+
 def run_prepare(ctx: Ctx) -> dict[str, Any]:
     from autocut.plan import Plan  # noqa: PLC0415
 
@@ -146,8 +190,9 @@ def run_finish(ctx: Ctx) -> dict[str, Any]:
     platform = str(o.get("platform", "bilibili"))
     ctx.stage("check-plan", platform)
     chk = ctx.autocut("check", [plan_rel, "--platform", platform, "--no-asr"], allow_fail=True)
-    ctx.stage("render")
-    ren = ctx.autocut("render", [plan_rel, "--out-dir", "out", "--force", "--loudnorm", str(o.get("loudnorm", "-14"))])
+    ren, healed = heal_seams(ctx, plan_rel, "out", str(o.get("loudnorm", "-14")))
+    plan = Plan.load(ctx.path(plan_rel))
+    summ = plan.summary()["outputs"][0]
     finals = [x for x in ctx.dir.joinpath("out").glob("*.mp4") if "preview" not in x.name]
     if not finals:
         raise PipelineError("no_output", "render 成功但没有找到成片", "看 render 的 JSON", "render")
@@ -157,7 +202,7 @@ def run_finish(ctx: Ctx) -> dict[str, Any]:
     credits = ingest.credits_text(ctx.app.store, ctx.job_id)
     risks = [i for i in (chk.get("items") or []) if i.get("severity") in ("risk", "warn")][:5] if chk.get("ok") else []
     lines = [f"{summ.get('source_span', total):.0f}s → {summ.get('duration', 0):.0f}s，剪掉 {summ.get('removed', 0):.0f}s（{summ.get('cut', {})}）",
-             f"剪辑决定由 DSH agent 做出（恢复 {len(keep)} 个候选，额外剪掉 {len(cut)} 个）；规则校验把 {guard['restored']} 处停在句子中间的剪法改回保留（多留 {guard['seconds']}s）",
+             f"剪辑决定由 DSH agent 做出（恢复 {len(keep)} 个候选，额外剪掉 {len(cut)} 个）；规则校验把 {guard['restored']} 处停在句子中间的剪法改回保留（多留 {guard['seconds']}s）；核验后又把 {len(healed)} 处接缝落在说话中间的剪法改回保留",
              f"出片核验：{_verify(ren)}"]
     if risks:
         lines.append("体检提示（留存风险信号，不是爆款保证）：" + "；".join(str(r.get("message", ""))[:80] for r in risks))
@@ -166,7 +211,7 @@ def run_finish(ctx: Ctx) -> dict[str, Any]:
     summary = "\n".join(lines)
     dv = {"id": "main", "final": f"out/{final.name}", "preview": f"out/preview-{final.stem}.mp4", "plan": plan_rel, "extras": [p for p in (f"out/{final.stem}.srt",) if (ctx.dir / p).exists()]}
     delivery.mark_awaiting(ctx.app.store, ctx.job_id, [dv], summary)
-    return {"ok": True, "deliverables": [dv], "preview": prev, "summary": summary, "state": "awaiting_confirmation", "guard": guard,
+    return {"ok": True, "deliverables": [dv], "preview": prev, "summary": summary, "state": "awaiting_confirmation", "guard": guard, "healed": healed,
             "next": [{"cmd": f"autocut-remote fetch {ctx.job_id} {dv['preview']}", "why": "把预览下载到本机再 wechat_send_file 发给用户确认"}]}
 
 

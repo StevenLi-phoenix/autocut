@@ -148,7 +148,8 @@ def test_commentary_prepare_returns_brief_and_asks_agent(app: App, media: Path) 
     assert b["duration"] > 10 and b["sheets"] and b["limits"]["max_lines"] >= 4 and "script_schema" in b and "frames" not in b
     sh = b["sheets"][0]
     assert (app.store.job_dir(job) / sh["path"]).stat().st_size > 2000 and sh["cells"][0]["label"].startswith("1 ")  # 关键帧拼图：带编号和时间标签，由 DSH 自己看
-    assert [s["name"] for s in r["stages"]] == ["cut", "eyes"]
+    names = [s["name"] for s in r["stages"]]
+    assert names[0] == "cut" and names[-1] == "eyes" and "render" in names and "healed" in res  # 去停顿后先渲染核验、把落在说话中间的接缝处的剪法改回保留，再取关键帧
     assert delivery.state(app.store, job)["status"] == "working"  # 还没有成片，不能确认
 
 
@@ -429,3 +430,15 @@ def test_frame_endpoint_and_inbox_link(app: App, media: Path) -> None:
             ingest.link_inbox(app.cfg, app.store, job, "../x.mp4")
     finally:
         policy.EXTRA_READ_ROOTS.remove(inbox)
+
+
+def test_seams_to_restore_maps_flagged_seam_to_the_cut_segment_between() -> None:
+    """核验报告的"落在说话中间的接缝"（成片时间）→ 接缝处被剪掉的片段：确定性吸附，不是放宽核验。"""
+    from autocut.plan import Output, Plan, Segment, Source
+    from autocut.worker.pipe_cut import seams_to_restore
+
+    segs = [Segment("d1", "a", 0, 10, "keep"), Segment("d2", "a", 10, 11, "cut", "silence"), Segment("d3", "a", 11, 20, "keep"), Segment("d4", "a", 20, 22, "cut", "silence"),
+            Segment("d5", "a", 22, 30, "keep")]
+    plan = Plan("cut", {"a": Source("a", "a.mp4", "video", 30.0)}, [Output("main", segs)])  # 成片：d1 0–10，d3 10–19，d5 19–27
+    assert seams_to_restore(plan, [10.0]) == ["d2"] and seams_to_restore(plan, [19.02]) == ["d4"]
+    assert seams_to_restore(plan, [10.0, 19.0]) == ["d2", "d4"] and seams_to_restore(plan, [0.0]) == []
