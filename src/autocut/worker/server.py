@@ -118,7 +118,8 @@ class App:
         if sub == ["reject"] and method == "POST":
             return 200, {"ok": True, "state": delivery.reject(self.store, job_id, str(body.get("reason", "")), str(body.get("text", "")), list(body.get("outputs") or []))}
         if sub == ["handoff"] and method == "POST":
-            return 200, delivery.handoff(self.store, job_id, str(body.get("to", "local")), str(body.get("title", "")), str(body.get("desc", "")), self.cfg.root)
+            return 200, delivery.handoff(self.store, job_id, str(body.get("to", "local")), str(body.get("title", "")), str(body.get("desc", "")), self.cfg.root,
+                                         kaorou={k: body.get(k) for k in ("tags", "tid", "visibility", "season", "api") if body.get(k) is not None})
         raise PolicyError("not_found", f"没有这个路径：{path}", "路由见 docs/dev/worker.md")
 
     def _run_brief(self, r: dict[str, Any]) -> dict[str, Any]:
@@ -296,6 +297,11 @@ def main() -> int:
 
     app = App(cfg)
     pipelines.register(app)
+    from autocut.worker.events import Emitter  # noqa: PLC0415
+
+    emitter = Emitter(cfg)
+    app.runner.on_finish(emitter)
+    log.info("DSH 事件：%s", "已启用 → " + emitter.url if emitter.enabled else "未启用（secrets 里没有 AUTOCUT_DSH_EVENT_TOKEN）")
     srv = make_server(cfg, app)
     log.info("autocut-worker 监听 http://%s:%d root=%s encoder=%s heavy_slots=%d autocut=%s", cfg.host, cfg.port, cfg.root, cfg.encoder, cfg.heavy_slots, list(cfg.autocut_cmd))
     try:

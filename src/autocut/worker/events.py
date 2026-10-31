@@ -1,0 +1,62 @@
+"""DSH 事件：流水线结束时 POST 到 DSH 的 /hooks/lsy（source=autocut），主 agent 被唤醒后把预览发给用户 / 说明失败原因。
+
+事件文字只描述"发生了什么 + 去哪看"，不含任何指令；agent 回 worker 取摘要（status / run）。失败不影响流水线本身（只记日志）。
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import urllib.error
+import urllib.request
+from typing import Any
+
+from autocut.worker.config import WorkerConfig, load_secrets
+
+log = logging.getLogger(__name__)
+DEFAULT_URL = "http://127.0.0.1:3081/hooks/lsy"
+
+
+def event_for(job_id: str, run: dict[str, Any]) -> dict[str, Any] | None:
+    """pipeline run 结束 → 事件体；其它 run（单个 autocut 子命令、ingest）不发。"""
+    if run.get("kind") != "pipeline" or run.get("status") not in ("ok", "failed"):
+        return None
+    name = run.get("cmd", "")
+    res = run.get("result") or {}
+    key = f"{job_id}-{run['id']}"
+    if run["status"] == "ok" and res.get("state") == "awaiting_confirmation":
+        n = len(res.get("deliverables") or [])
+        return {"kind": "autocut.ready", "key": key, "subject": job_id, "title": f"autocut {name} 完成，{n} 条成片等用户确认（job {job_id}）",
+                "text": f"run {run['id']}；摘要：{str(res.get('summary', ''))[:3000]}"}
+    if run["status"] == "failed":
+        err = res.get("error") or {}
+        return {"kind": "autocut.failed", "key": key, "subject": job_id, "title": f"autocut {name} 失败：{str(err.get('code', ''))}（job {job_id}）",
+                "text": f"run {run['id']}；{str(err.get('message', ''))[:600]}；fix：{str(err.get('fix', ''))[:300]}"}
+    return None
+
+
+class Emitter:
+    def __init__(self, cfg: WorkerConfig) -> None:
+        sec = load_secrets(cfg.secrets_file)
+        self.token = sec.get("AUTOCUT_DSH_EVENT_TOKEN", "")
+        self.url = sec.get("AUTOCUT_DSH_EVENT_URL") or DEFAULT_URL
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.token)
+
+    def __call__(self, job_id: str, run: dict[str, Any]) -> None:
+        ev = event_for(job_id, run)
+        if ev is None:
+            return
+        if not self.enabled:
+            log.info("事件 %s 未发送：没有配置 AUTOCUT_DSH_EVENT_TOKEN", ev["kind"])
+            return
+        req = urllib.request.Request(self.url, data=json.dumps(ev, ensure_ascii=False).encode("utf-8"), method="POST",
+                                     headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                body = r.read()[:200]
+            log.info("事件已发送 %s key=%s → %s %s", ev["kind"], ev["key"], r.status, body)
+        except (urllib.error.URLError, OSError) as e:
+            log.warning("事件发送失败 %s：%s", ev["kind"], e)

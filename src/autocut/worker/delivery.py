@@ -107,7 +107,8 @@ def pass_rate(root: Path, last: int = 10) -> dict[str, Any]:
     try:
         for line in p.read_text(encoding="utf-8").splitlines():
             r = json.loads(line)
-            rows += [r["event"]] * int(r.get("n", 1))
+            if r["event"] in ("confirmed", "rejected"):  # uploaded 等其它流水账不算裁决
+                rows += [r["event"]] * int(r.get("n", 1))
     except (OSError, ValueError):
         pass
     rows = rows[-last:]
@@ -137,12 +138,12 @@ def make_preview(src: Path, dst: Path, *, ffmpeg: str = "ffmpeg", max_bytes: int
     return {"path": str(dst), "bytes": size, "video_kbps": vbr // 1000}
 
 
-def handoff(store: Store, job_id: str, to: str, title: str, desc: str, root: Path) -> dict[str, Any]:
+def handoff(store: Store, job_id: str, to: str, title: str, desc: str, root: Path, *, kaorou: dict[str, Any] | None = None) -> dict[str, Any]:
     st = state(store, job_id)
     if st["status"] not in ("confirmed", "handed_off"):
         raise PolicyError("not_confirmed", f"成片还没有用户确认（状态：{st['status']}），不能交付或上传", "先把预览发给用户，拿到明确同意后 confirm --quote '用户原话'")
-    if to != "local":
-        raise PolicyError("handoff_target_unsupported", f"暂不支持的交付目标：{to}", "目前只有 local（落盘到 <root>/handoff/）")
+    if to not in ("local", "kaorou"):
+        raise PolicyError("handoff_target_unsupported", f"不支持的交付目标：{to}", "local（落盘到 <root>/handoff/）| kaorou（交烤肉上传，默认仅自己可见）")
     d = store.job_dir(job_id)
     dest = root / "handoff" / job_id
     dest.mkdir(parents=True, exist_ok=True)
@@ -160,6 +161,25 @@ def handoff(store: Store, job_id: str, to: str, title: str, desc: str, root: Pat
     (dest / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     if credits:
         (dest / "credits.txt").write_text(credits + "\n", encoding="utf-8")
+    result: dict[str, Any] = {"ok": True, "to": to, "dir": str(dest), "files": files, "credits": credits}
+    if to == "kaorou":
+        from autocut.worker import kaorou as K  # noqa: PLC0415
+
+        k = kaorou or {}
+        prov = read_json(d / "provenance.json", {"sources": []})
+        src_url = next((x.get("url") for x in prov["sources"] if x.get("url")), "") or ""
+        third = bool((store.get_job(job_id).get("config") or {}).get("third_party")) or bool(src_url)
+        mains = [dv for dv in live(st) if dv.get("role", "main") == "main"]
+        ups = []
+        for dv in mains:
+            f = dest / Path(dv["final"]).name
+            sha = K._sha256(f)
+            req = K.build_request(f, title=(title if len(mains) == 1 else f"{title}｜{dv.get('title', '')}").strip("｜"), desc=desc, tags=list(k.get("tags") or []), tid=int(k.get("tid") or K.DEFAULT_TID),
+                                  visibility=str(k.get("visibility") or "self"), source_url=src_url, third_party=third, credits=credits, season=k.get("season"), client_id=K.client_id_for(job_id, f, sha))
+            sess = K.upload(f, req, str(k.get("api") or K.API))
+            ups.append({"deliverable": dv["id"], "upload_id": sess.get("upload_id"), "job_id": sess.get("job_id"), "status": sess.get("status"), "visibility": req["visibility"]})
+        result["kaorou"] = ups
+        _metric(root, job_id, "uploaded", n=len(ups))
     st["status"] = "handed_off"
-    _save(store, job_id, st, "handed_off", to=to, files=files)
-    return {"ok": True, "to": to, "dir": str(dest), "files": files, "credits": credits}
+    _save(store, job_id, st, "handed_off", to=to, files=files, **({"kaorou": result.get("kaorou")} if to == "kaorou" else {}))
+    return result

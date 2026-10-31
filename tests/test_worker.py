@@ -11,6 +11,7 @@ import textwrap
 import threading
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -486,3 +487,160 @@ def test_ingest_helper_detects_truncated_video(tmp_path: Path) -> None:
     bad = tmp_path / "bad.mp4"  # 视频 3s + 音频 8s
     sp.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=d=3:s=160x90:r=10", "-f", "lavfi", "-i", "sine=d=8", "-c:v", "libx264", "-c:a", "aac", str(bad)], check=True)
     assert "对不上" in (h.integrity_problem(bad) or "")
+
+
+# ------------------------------------------------------------------ DSH 事件
+
+from autocut.worker import events  # noqa: E402
+
+
+def test_event_for_pipeline_results() -> None:
+    ok = {"id": "r-1", "kind": "pipeline", "cmd": "cut", "status": "ok", "result": {"state": "awaiting_confirmation", "deliverables": [{}, {}], "summary": "剪了 2 分钟"}}
+    e = events.event_for("job1", ok)
+    assert e and e["kind"] == "autocut.ready" and e["subject"] == "job1" and e["key"] == "job1-r-1" and "2 条成片" in e["title"] and "剪了 2 分钟" in e["text"]
+    bad = {"id": "r-2", "kind": "pipeline", "cmd": "clips", "status": "failed", "result": {"error": {"code": "none_passed", "message": "没有一条通过", "fix": "换素材"}}}
+    f = events.event_for("job1", bad)
+    assert f and f["kind"] == "autocut.failed" and "none_passed" in f["title"] and "换素材" in f["text"]
+    assert events.event_for("job1", {"id": "r-3", "kind": "autocut", "status": "ok"}) is None  # 单个子命令不发
+    assert events.event_for("job1", {"id": "r-4", "kind": "pipeline", "status": "cancelled"}) is None
+    for ev in (e, f):  # DSH 入口的字段限制：kind 以 source. 开头、key/subject ≤200、title ≤300、text ≤8000
+        assert ev["kind"].startswith("autocut.") and len(ev["key"]) <= 200 and len(ev["title"]) <= 300 and len(ev["text"]) <= 8000
+
+
+def test_emitter_posts_with_bearer_and_survives_failure(tmp_path: Path) -> None:
+    import json as _json
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    got: list[tuple[str, dict]] = []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            n = int(self.headers["Content-Length"])
+            got.append((self.headers.get("Authorization", ""), _json.loads(self.rfile.read(n))))
+            self.send_response(202)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    sec = tmp_path / "w.env"
+    sec.write_text(f"AUTOCUT_DSH_EVENT_TOKEN=tok123\nAUTOCUT_DSH_EVENT_URL=http://127.0.0.1:{srv.server_address[1]}/hooks/lsy\n")
+    em = events.Emitter(WorkerConfig(root=tmp_path, secrets_file=str(sec)))
+    em("j", {"id": "r-1", "kind": "pipeline", "cmd": "cut", "status": "failed", "result": {"error": {"code": "x", "message": "m", "fix": "f"}}})
+    assert got and got[0][0] == "Bearer tok123" and got[0][1]["kind"] == "autocut.failed"
+    srv.shutdown()
+    em("j", {"id": "r-2", "kind": "pipeline", "cmd": "cut", "status": "failed", "result": {}})  # 服务挂了：只记日志，不抛
+    assert not events.Emitter(WorkerConfig(root=tmp_path)).enabled  # 没配 token 就不发
+
+
+# ------------------------------------------------------------------ 交给烤肉（假烤肉 API）
+
+
+class _FakeKaorou:
+    def __init__(self) -> None:
+        import hashlib as _h
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.calls: list[tuple[str, str]] = []
+        self.sessions: dict[str, dict] = {}
+        self.bodies: dict[str, bytes] = {}
+        outer = self
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _send(self, code, obj):
+                b = json.dumps(obj).encode()
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n)) if n else {}
+                outer.calls.append(("POST", self.path))
+                if self.path == "/external-uploads":
+                    uid = str(uuid.uuid5(uuid.NAMESPACE_URL, body["client_upload_id"]))
+                    s = outer.sessions.setdefault(uid, {"upload_id": uid, "status": "awaiting_content", "request": body, "job_id": None})
+                    return self._send(201, s)
+                if self.path.endswith("/commit"):
+                    uid = self.path.split("/")[2]
+                    outer.sessions[uid].update(status="queued", job_id="job-42")
+                    return self._send(200, outer.sessions[uid])
+                self._send(404, {})
+
+            def do_PUT(self):
+                uid = self.path.split("/")[2]
+                n = int(self.headers["Content-Length"])
+                data = self.rfile.read(n)
+                outer.calls.append(("PUT", self.path))
+                outer.bodies[uid] = data
+                if _h.sha256(data).hexdigest() != outer.sessions[uid]["request"]["sha256"]:
+                    return self._send(422, {"detail": "mismatch"})
+                outer.sessions[uid]["status"] = "ready"
+                self._send(200, outer.sessions[uid])
+
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.api = f"http://127.0.0.1:{self.srv.server_address[1]}"
+
+
+def _confirmed_job(app: App, third: bool = True, url: str = "https://youtu.be/abc") -> str:
+    job = app.store.create_job("t", {"third_party": third, "attribution": {"repost_label": True}})["id"]
+    d = app.store.job_dir(job)
+    (d / "out").mkdir(exist_ok=True)
+    (d / "out" / "a.main.mp4").write_bytes(b"fakevideo" * 1000)
+    ingest.register_source(app.store, job, {"kind": "url", "file": "src/a.mp4", "url": url, "title": "T", "channel": "C"})
+    delivery.mark_awaiting(app.store, job, [{"id": "main", "final": "out/a.main.mp4", "preview": "out/p.mp4", "extras": [], "role": "main"}], "s")
+    delivery.confirm(app.store, job, "可以发")
+    return job
+
+
+def test_handoff_to_kaorou_sequence_defaults_and_idempotency(app: App) -> None:
+    fk = _FakeKaorou()
+    job = _confirmed_job(app)
+    r = delivery.handoff(app.store, job, "kaorou", "我的标题", "简介", app.cfg.root, kaorou={"tags": ["游戏", "解说"], "api": fk.api})
+    assert [c[0] for c in fk.calls] == ["POST", "PUT", "POST"] and fk.calls[2][1].endswith("/commit")
+    up = r["kaorou"][0]
+    sess = next(iter(fk.sessions.values()))["request"]
+    assert up["job_id"] == "job-42" and up["visibility"] == "self"  # 默认仅自己可见
+    assert sess["copyright"] == 2 and sess["source_url"] == "https://youtu.be/abc" and sess["tid"] == 17 and "转载自 C《T》" in sess["description"]
+    assert next(iter(fk.bodies.values())) == b"fakevideo" * 1000
+    # 重试（同内容）：同一个会话，不重复上传
+    n_put = sum(1 for c in fk.calls if c[0] == "PUT")
+    delivery.handoff(app.store, job, "kaorou", "我的标题", "简介", app.cfg.root, kaorou={"tags": ["游戏", "解说"], "api": fk.api})
+    assert sum(1 for c in fk.calls if c[0] == "PUT") == n_put and len(fk.sessions) == 1
+
+
+def test_handoff_to_kaorou_gate_and_validation(app: App) -> None:
+    fk = _FakeKaorou()
+    job = app.store.create_job("t", {})["id"]
+    delivery.mark_awaiting(app.store, job, [{"id": "main", "final": "out/a.mp4", "role": "main"}], "s")
+    with pytest.raises(PolicyError) as e:  # 没确认：烤肉一次都不会被调用
+        delivery.handoff(app.store, job, "kaorou", "t", "", app.cfg.root, kaorou={"tags": ["x"], "api": fk.api})
+    assert e.value.code == "not_confirmed" and fk.calls == []
+    j2 = _confirmed_job(app, third=True, url="")  # 转载却没有原链接
+    with pytest.raises(PolicyError) as e:
+        delivery.handoff(app.store, j2, "kaorou", "t", "", app.cfg.root, kaorou={"tags": ["x"], "api": fk.api})
+    assert e.value.code == "source_url_required" and fk.calls == []
+    j3 = _confirmed_job(app)
+    for kw, code in (({"tags": []}, "tags_required"), ({"tags": ["x"], "visibility": "friends"}, "bad_visibility")):
+        with pytest.raises(PolicyError) as e:
+            delivery.handoff(app.store, j3, "kaorou", "t", "", app.cfg.root, kaorou={"api": fk.api, **kw})
+        assert e.value.code == code
+    with pytest.raises(PolicyError) as e:
+        delivery.handoff(app.store, j3, "kaorou", "", "", app.cfg.root, kaorou={"tags": ["x"], "api": fk.api})
+    assert e.value.code == "title_required" and fk.calls == []
+
+
+def test_kaorou_unreachable_is_reported(app: App) -> None:
+    job = _confirmed_job(app)
+    with pytest.raises(PolicyError) as e:
+        delivery.handoff(app.store, job, "kaorou", "t", "", app.cfg.root, kaorou={"tags": ["x"], "api": "http://127.0.0.1:9"})
+    assert e.value.code == "kaorou_unreachable"
