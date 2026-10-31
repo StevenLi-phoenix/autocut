@@ -228,7 +228,7 @@ def test_ingest_env_only_whitelisted(tmp_path: Path, cfg: WorkerConfig) -> None:
     env = ingest.ingest_env(c)
     assert env["KAOROU_YT_COOKIES_PATH"] == "/c/cookies.txt" and env["KAOROU_POT_BASE_URL"] == "http://127.0.0.1:4416"
     assert "DEEPSEEK_API_KEY" not in env and "KAOROU_INTERNAL_SECRET" not in env
-    assert env["KAOROU_MIN_HEIGHT"] == "360"
+    assert env["KAOROU_MIN_HEIGHT"] == "0"  # 关掉烤肉的分辨率门槛
 
 
 def test_inbox_only(app: App) -> None:

@@ -50,7 +50,7 @@ def parse_env_file(path: Path, keys: tuple[str, ...]) -> dict[str, str]:
 
 def ingest_env(cfg: WorkerConfig) -> dict[str, str]:
     env = {"PATH": os.pathsep.join(p for p in (cfg.ffmpeg_dir, "/opt/homebrew/bin", "/usr/bin", "/bin") if p),
-           "HOME": os.environ.get("HOME", "/tmp"), "KAOROU_MIN_HEIGHT": "360", "PYTHONUNBUFFERED": "1"}
+           "HOME": os.environ.get("HOME", "/tmp"), "KAOROU_MIN_HEIGHT": "0", "PYTHONUNBUFFERED": "1"}
     if cfg.ingest_env_file:
         env.update(parse_env_file(Path(cfg.ingest_env_file), YT_ENV_WHITELIST))
     return env
