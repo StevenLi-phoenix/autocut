@@ -32,7 +32,7 @@ const PAIRS = [
   ["cut", "panel"], ["cut", "cut-soft"], ["ink", "cut-soft"],
   ["warn-ink", "panel"], ["warn-ink", "warn-soft"], ["ink", "warn-soft"],
   ["ok", "ok-soft"], ["ink", "ok-soft"],
-  ["tl-text", "tl-bg"], ["bg", "ink"], ["on-cut", "cut"], ["on-ok", "ok"],
+  ["tl-text", "tl-bg"], ["bg", "ink"], ["on-cut", "cut"], ["on-ok", "ok"], ["agent", "panel"], ["agent", "agent-soft"], ["ink", "agent-soft"],
 ];
 
 for (const [name, t] of [["浅色", light], ["深色", dark]]) {

@@ -18,7 +18,9 @@ python -c "from autocut.review.server import serve; serve('talk.autocut.json')"
 | `GET /media/<source_id>` | 素材文件，支持 Range（206）、HEAD |
 | `GET /api/words/<source_id>` | 逐词文字稿（`sources.<id>.words`，否则分析缓存里最新的 `words-*.json`）；没有 → 404 并说明原因 |
 | `GET /api/peaks/<source_id>?per_sec=50` | 波形峰值（0–1），经 `Media._cached` 落盘缓存 |
-| `POST /api/render` / `GET /api/jobs/<id>` / `POST /api/jobs/<id>/cancel` | 后台线程调 `render.render(plan, output_ids=, progress=)`；取消靠 progress 回调抛 `InterruptedError` |
+| `POST /api/render` / `GET /api/jobs/<id>` / `POST /api/jobs/<id>/cancel` | 后台线程调 `render.render(plan, output_ids=, progress=, loudnorm=)`（`options.loudnorm`：不给 = 听 render 的默认）；取消靠 progress 回调抛 `InterruptedError` |
+| `POST /api/repace` | `{pace, revision, etag?, output_id?}`：和 PUT 一样先校验 revision，然后调 `recipes.cut.repace`（跳过手改过/锁定的片段），校验、保存，返回 `{changed, revision, etag, plan}`；repace 产生不合法的方案时返回 500 且不写盘 |
+| `GET /api/captions?output=ID` | 字幕条目 `{start, end, text}`（成片时间轴，`captions.cues_for`），预览叠加字幕用。没有逐词文字稿时不调用 `cues_for`（它会触发语音识别），返回 `has_words: false` 和原因 |
 | `POST /api/check` | `check.check(plan, output_id=)` → `CheckReport.to_dict()` |
 | `POST /api/export` | `export.export(plan, fmt, output_id=)`，fmt ∈ fcpxml / xmeml / edl / srt / markers |
 | `POST /api/relocate` / `POST /api/reveal` | 重新定位丢失的素材 / 在 Finder 中显示本次生成的文件 |
@@ -34,6 +36,14 @@ render / check / export 在请求时才 import；失败返回 **503**（"出片/
 | `timeline.js` | canvas 波形 + 片段条，缩放、平移、拖边界 |
 | `transcript.js` | 文字稿栏（修订标记样式）、筛选 |
 | `app.js` | 状态、自动保存（800ms）、冲突处理、快捷键、两种模式、出片/体检/导出 |
+| `merge.test.js` | 差异、三方合并、冲突解决、撤销往返；“拿不准”的类型、抽查顺序、多留/少留、字幕模式、尺寸预设、体检建议 → 动作 |
 | `a11y.test.js` | 从 `style.css` 读设计令牌，校验浅色/深色主题的对比度（文字 ≥ 4.5:1） |
+
+## 人和 agent 共用一份方案
+
+- **保存**：PUT 带 revision 和内容哈希；对不上返回 409 并附磁盘版本。页面不会静默覆盖，也不会整份二选一。
+- **三方合并**（`model.js` 的 `mergePlans`）：共同祖先 = 上次和服务器同步的版本，我的 = 页面上现在的（含没保存的），对方的 = 磁盘上的新版本。改了不同片段/字段自动合并；同一处改得不一样（或两边都明确重新决定过且结论相反）才算冲突，先保留我的值，在右侧“方案冲突”面板里逐条选；冲突期间不保存，但可以继续编辑，编辑不会丢。
+- **没有未保存改动时**：agent 的改动逐处套到当前方案上，记成一条可撤销的历史（⌘Z = 拒绝），撤销栈保留；改过的行标出来，可以筛选、`A` / `⇧A` 逐处跳转。
+- **改节奏**同理：服务器重算后，页面用 `diffPlans` 把差异套上去，记一条可撤销的历史，改过的行标“节奏已调”。
 
 页面离线可用：不引用任何 CDN 或网络字体；字体用系统栈。控制台里 `__autocut` 暴露 state/player/timeline 方便排查。

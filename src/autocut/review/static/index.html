@@ -45,12 +45,15 @@
       <div class="tb-spacer"></div>
       <span id="cand-auth" class="auth-note" hidden>ⓘ 发布前请确认已获得主播授权</span>
       <button id="undo-btn" class="btn btn-quiet" aria-label="撤销（⌘Z）" title="撤销" disabled>↶ 撤销</button>
+      <button id="redo-btn" class="btn btn-quiet" aria-label="重做（⇧⌘Z）" title="重做（⇧⌘Z）" disabled>↷ 重做</button>
+      <div class="menu-host"><button id="cap-btn" class="btn" aria-label="字幕模式">字幕 ▾</button></div>
       <button id="check-btn" class="btn">体检</button>
       <div class="menu-host">
         <button id="export-btn" class="btn" aria-label="导出工程">导出工程 ▾</button>
       </div>
+      <button id="opts-btn" class="btn btn-quiet" title="出片选项：字幕、响度、成片尺寸">出片选项</button>
       <button id="render-btn" class="btn btn-primary"><span id="render-label">出片</span> ▸</button>
-      <button id="size-btn" class="btn btn-quiet" aria-label="切换字号" title="字号：标准 / 大 / 特大（也可以用 ⌘+ 放大）">Aa</button>
+      <button id="size-btn" class="btn btn-quiet" aria-label="切换字号" title="字号：标准 / 大 / 特大 / 超大（也可以用 ⌘+ 放大）">Aa</button>
       <button id="help-btn" class="btn btn-quiet" aria-label="快捷键帮助（?）" title="快捷键（?）">?</button>
     </div>
   </header>
@@ -61,9 +64,9 @@
     <main id="main" class="main"></main>
     <aside id="drawer" class="drawer" aria-label="发布前体检" hidden>
       <div class="drawer-head">
-        <h2>发布前体检</h2>
+        <h2 id="drawer-title">发布前体检</h2>
         <button id="drawer-rerun" class="btn btn-sm">重新体检</button>
-        <button id="drawer-close" class="icon-btn" aria-label="关闭体检面板（Esc）">×</button>
+        <button id="drawer-close" class="icon-btn" aria-label="关闭面板（Esc）">×</button>
       </div>
       <div id="drawer-body" class="drawer-body"></div>
     </aside>
@@ -71,18 +74,7 @@
 
   <footer class="footer">
     <div id="jobbar" class="jobbar" hidden aria-live="polite"></div>
-    <div class="hints">
-      <span><kbd>空格</kbd> 播放/暂停</span>
-      <span><kbd>J</kbd>/<kbd>K</kbd> 上/下一个决定</span>
-      <span><kbd>⇧J</kbd>/<kbd>⇧K</kbd> 只在拿不准之间跳</span>
-      <span><kbd>X</kbd> 剪/留切换</span>
-      <span><kbd>L</kbd> 锁定</span>
-      <span><kbd>[</kbd> <kbd>]</kbd> 微调边界 50ms</span>
-      <span><kbd><span data-mod>⌘</span>Z</kbd> 撤销</span>
-      <span><kbd>?</kbd> 全部快捷键</span>
-      <span class="tb-spacer"></span>
-      <span id="footer-save" class="muted"></span>
-    </div>
+    <div class="hints" id="hints"></div>
   </footer>
 </div>
 
@@ -129,6 +121,8 @@
 
 <template id="tpl-transcript-block">
   <div class="doc-body">
+    <div id="marks-bar" class="bar bar-agent" hidden></div>
+    <div id="spot-bar" class="bar bar-spot" hidden></div>
     <p id="no-text-note" class="note" hidden>没有文字稿，所以按片段列表和时间码显示。装好语音识别模型（models/ggml-large-v3-turbo.bin）后重新运行 autocut cut，就会有文字。</p>
     <div class="doc-scroll" id="doc-scroll">
       <ol id="rows" class="rows" aria-label="片段列表"></ol>
@@ -139,12 +133,17 @@
 
 <template id="tpl-timeline">
   <section class="pane stage" aria-label="预览与时间线">
-    <div class="player">
-      <video id="video" playsinline></video>
-      <div id="skip-chip" class="skip-chip" hidden aria-hidden="true"></div>
-      <div id="player-msg" class="player-msg" role="status" hidden></div>
+    <div class="stage-top">
+      <div class="player">
+        <video id="video" playsinline></video>
+        <div id="skip-chip" class="skip-chip" hidden aria-hidden="true"></div>
+        <div id="cap-badge" class="cap-badge" hidden></div>
+        <div id="cap-overlay" class="cap-overlay" hidden aria-hidden="true"><span></span></div>
+        <div id="player-msg" class="player-msg" role="status" hidden></div>
+      </div>
+      <div data-slot="transport"></div>
+      <p id="cap-note" class="note note-tight" hidden>字幕是空的：没有逐词文字稿。装好语音识别模型（models/ggml-large-v3-turbo.bin）后重新运行 autocut cut 就会有。</p>
     </div>
-    <div data-slot="transport"></div>
     <div data-slot="timeline"></div>
   </section>
   <section class="pane doc" id="transcript" aria-label="文字稿" tabindex="-1">
@@ -155,6 +154,7 @@
         <button role="radio" aria-checked="false" data-filter="uncertain">拿不准 <span class="count mono"></span></button>
         <button role="radio" aria-checked="false" data-filter="cut">剪掉 <span class="count mono"></span></button>
         <button role="radio" aria-checked="false" data-filter="keep">保留 <span class="count mono"></span></button>
+        <button role="radio" aria-checked="false" data-filter="marked" hidden>改过的 <span class="count mono"></span></button>
       </div>
     </div>
     <div id="reason-chips" class="chips" role="group" aria-label="按剪掉的理由筛选"></div>
@@ -176,9 +176,12 @@
       <div id="frame" class="frame">
         <video id="video" playsinline></video>
         <div id="skip-chip" class="skip-chip" hidden aria-hidden="true"></div>
+        <div id="cap-badge" class="cap-badge" hidden></div>
+        <div id="cap-overlay" class="cap-overlay" hidden aria-hidden="true"><span></span></div>
         <div id="player-msg" class="player-msg" role="status" hidden></div>
       </div>
     </div>
+    <p id="cap-note" class="note note-tight" hidden>字幕是空的：没有逐词文字稿。</p>
     <div id="crop-tools" class="crop-tools" hidden>
       <span class="muted small">裁切框</span>
       <button class="btn btn-sm" data-crop="left" aria-label="裁切框向左 5%">◂</button>
@@ -216,12 +219,13 @@
       <tbody>
         <tr><td><kbd>空格</kbd></td><td>播放 / 暂停</td></tr>
         <tr><td><kbd>P</kbd></td><td>在“按方案播放”和“原片”之间切换</td></tr>
-        <tr><td><kbd>J</kbd> <kbd>K</kbd></td><td>下一个 / 上一个决定（剪掉的、拿不准的、有说明的）</td></tr>
-        <tr><td><kbd>⇧J</kbd> <kbd>⇧K</kbd></td><td>只在“拿不准”之间跳</td></tr>
+        <tr><td><kbd>J</kbd> <kbd>K</kbd></td><td>J 下一个、K 上一个决定（剪掉的、拿不准的、有说明的）</td></tr>
+        <tr><td><kbd>⇧J</kbd> <kbd>⇧K</kbd></td><td>只在“拿不准”之间跳；没有拿不准时，按把握度从低到高抽查</td></tr>
+        <tr><td><kbd>A</kbd> <kbd>⇧A</kbd></td><td>跳到 agent（或节奏调整）改过的下一处 / 上一处</td></tr>
         <tr><td><kbd>X</kbd></td><td>切换当前决定：剪掉 ⇄ 保留（改完不再算“拿不准”）</td></tr>
         <tr><td><kbd>L</kbd></td><td>锁定 / 解锁：重新生成方案时保持不变</td></tr>
         <tr><td><kbd>Enter</kbd></td><td>试听当前片段（前后各多放 1 秒，不跳过）</td></tr>
-        <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>当前边界 提前 / 推后 50ms（加 <kbd>⇧</kbd> 为 500ms）</td></tr>
+        <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>把当前边界提前 / 推后 50ms（加 <kbd>⇧</kbd> 为 500ms）。想“多留 / 少留”一点，用选中行上的按钮更直观</td></tr>
         <tr><td><kbd>E</kbd></td><td>切换微调的是起点还是终点</td></tr>
         <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>后退 / 前进 1 秒（加 <kbd>⇧</kbd> 为 5 秒）</td></tr>
         <tr><td><kbd><span data-mod>⌘</span>Z</kbd></td><td>撤销（<kbd>⇧</kbd><kbd><span data-mod>⌘</span>Z</kbd> 重做）</td></tr>
@@ -231,7 +235,46 @@
       </tbody>
     </table>
     <label class="check"><input type="checkbox" id="opt-audition"> 微调边界时自动试听剪口附近（约 1 秒）</label>
+    <details class="concepts">
+      <summary>这页怎么用（几个概念）</summary>
+      <dl>
+        <dt>拿不准</dt><dd>机器对这个决定的把握度低于 75%。没有拿不准，不等于都对：可以点“抽查”，按把握度从低到高看。</dd>
+        <dt>锁定</dt><dd>锁定的片段，改节奏时不会被动（手改过的片段也一样）。</dd>
+        <dt>节奏</dt><dd>每个停顿保留多长：紧凑 0.15 秒、自然 0.4 秒、从容 0.8 秒。点另一档会在页面里重新划分停顿，可以撤销。</dd>
+        <dt>字幕</dt><dd>“烧进画面”是画在视频上；“单独 srt”只另外写一个文件。预览里叠加的字幕按当前选择显示。</dd>
+        <dt>导出的文件</dt><dd>和方案文件放在同一个文件夹里，完成后点“在 Finder 中显示”。</dd>
+        <dt>方案文件</dt><dd>你在这里改的和 agent 在终端里改的是同一份 .autocut.json。别人改了会标出来，你可以逐处接受或撤销；两边改了同一处，会让你逐条选。</dd>
+      </dl>
+    </details>
     <p class="muted small">字号：点工具栏的 <strong>Aa</strong> 切换，或者用 <kbd><span data-mod>⌘</span>+</kbd> 放大整个页面。所有改动自动保存，也可以随时在终端里让 agent 接着改同一份方案文件。</p>
+  </form>
+</dialog>
+
+<dialog id="render-opts" aria-labelledby="opts-title">
+  <form method="dialog" class="dlg">
+    <div class="dlg-head"><h2 id="opts-title">出片选项</h2><button id="opts-close" class="icon-btn" aria-label="关闭" type="button">×</button></div>
+    <fieldset class="opt-group">
+      <legend>字幕</legend>
+      <label class="check"><input type="radio" name="opt-cap" value="burn"> 烧进画面（画在视频上，上传到短视频平台不会丢）</label>
+      <label class="check"><input type="radio" name="opt-cap" value="srt"> 单独 srt（另外写一个 .srt 文件，视频里没有字幕）</label>
+      <label class="check"><input type="radio" name="opt-cap" value="off"> 关（没有字幕）</label>
+    </fieldset>
+    <fieldset class="opt-group">
+      <legend>响度</legend>
+      <label class="check"><input type="radio" name="opt-ln" value="default"> 按平台默认（竖屏标准化到 -14 LUFS，横屏不处理）</label>
+      <label class="check"><input type="radio" name="opt-ln" value="on"> 标准化到 -14 LUFS（音量偏小或偏大时用）</label>
+      <label class="check"><input type="radio" name="opt-ln" value="off"> 不处理</label>
+    </fieldset>
+    <fieldset class="opt-group">
+      <legend>成片尺寸</legend>
+      <label class="check"><input type="radio" name="opt-size" value="source"> 跟随素材</label>
+      <label class="check"><input type="radio" name="opt-size" value="vertical"> 竖屏 1080×1920（抖音、Shorts、Reels）</label>
+      <label class="check"><input type="radio" name="opt-size" value="horizontal"> 横屏 1920×1080（B 站、YouTube）</label>
+      <label class="check"><input type="radio" name="opt-size" value="720p"> 720p（保持当前方向）</label>
+      <label class="check"><input type="radio" name="opt-size" value="1080p"> 1080p（保持当前方向）</label>
+    </fieldset>
+    <p class="muted small">字幕和尺寸会写进方案（可以 <span data-mod>⌘</span>Z 撤销）；响度只对这次出片生效。体检里的建议按钮改的就是这几项。</p>
+    <div class="dlg-actions"><button id="opts-done" class="btn btn-primary" value="close">完成</button></div>
   </form>
 </dialog>
 

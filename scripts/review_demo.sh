@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # 审阅页演示：用 fixtures/media 里的素材手工构造一份方案，然后启动审阅页。
 #
-#   scripts/review_demo.sh              口播（talk_zh.mp4）：单条时间线模式
+#   scripts/review_demo.sh              口播（talk_zh.mp4，手写的方案，带 2 处拿不准）：单条时间线模式
+#   scripts/review_demo.sh real         口播（talk_zh.mp4，用 autocut.recipes.cut 真实生成）：改节奏、抽查都能用
 #   scripts/review_demo.sh highlights   直播高光（stream_vod.mp4）：候选清单模式
 #
 # 环境变量：PORT=8765 固定端口；NO_OPEN=1 不自动打开浏览器；BUILD_ONLY=1 只生成方案、打印路径。
 # 方案写在 ${TMPDIR:-/tmp}/autocut-review-demo/，不改 fixtures。
-# （等 autocut.recipes.cut 可用后，可以换成 `autocut cut fixtures/media/talk_zh.mp4` 生成的真方案。）
+# 手写的演示方案没有 evidence.gap_span，所以页面里点节奏档位不会有变化；要试改节奏请用 `real`（需要本机语音识别模型）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -136,7 +137,22 @@ def demo_highlights() -> Path:
     return plan.path
 
 
-print(demo_cut() if kind == "cut" else demo_highlights() if kind == "highlights" else sys.exit(f"未知演示类型 {kind!r}，可选：cut | highlights"))
+def demo_real() -> Path:
+    """用真实的 cut 配方（要语音识别模型；有缓存时很快）。"""
+    import shutil
+
+    from autocut.recipes.cut import build
+
+    shutil.copy(media / "talk_zh.mp4", out / "talk_zh.mp4")  # 方案和素材放一起，路径用相对的
+    plan = build([out / "talk_zh.mp4"])
+    plan.save()
+    return plan.path
+
+
+builders = {"cut": demo_cut, "highlights": demo_highlights, "real": demo_real}
+if kind not in builders:
+    sys.exit(f"未知演示类型 {kind!r}，可选：{' | '.join(builders)}")
+print(builders[kind]())
 PY
 )"
 

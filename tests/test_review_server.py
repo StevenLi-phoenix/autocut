@@ -100,7 +100,7 @@ def test_get_plan(srv: ReviewServer) -> None:
     src = d["sources"]["main"]
     assert src["exists"] is True and src["url"] == "/media/main" and src["kind"] == "video"
     assert src["has_words"] is True
-    assert set(d["capabilities"]) == {"render", "check", "export"}
+    assert set(d["capabilities"]) == {"render", "check", "export", "repace", "captions"}
     assert d["formats"] == ["fcpxml", "xmeml", "edl", "srt", "markers"]
     assert d["etag"]
 
@@ -328,7 +328,7 @@ def test_missing_modules_return_503_not_crash(srv: ReviewServer, no_feature_modu
     assert status == 503 and "导出模块不可用" in r["error"]
     assert jcall(srv, "GET", "/api/plan")[0] == 200  # 服务还活着
     _, d = jcall(srv, "GET", "/api/plan")
-    assert d["capabilities"] == {"render": False, "check": False, "export": False}
+    assert [d["capabilities"][k] for k in ("render", "check", "export")] == [False, False, False]
 
 
 def test_export_rejects_unknown_format(srv: ReviewServer) -> None:
@@ -572,3 +572,181 @@ def test_real_render_and_export_modules(srv: ReviewServer, tmp_path: Path) -> No
     # 导出模块自己的 ValueError（这份方案没有文字稿 → 导不了 srt）原样变成 400
     status, r = jcall(srv, "POST", "/api/export", {"format": "srt"})
     assert status in (200, 400)
+
+
+# ---------- 改节奏、字幕、出片选项、合并保存（HCI 检查后新增） ----------
+
+
+def _stub_repace(monkeypatch: pytest.MonkeyPatch, fn) -> None:
+    import autocut.recipes.cut as cut
+
+    monkeypatch.setattr(cut, "repace", fn, raising=False)
+
+
+def _get(srv: ReviewServer) -> dict:
+    return jcall(srv, "GET", "/api/plan")[1]
+
+
+def test_repace_endpoint_saves_and_returns_new_plan(srv: ReviewServer, plan_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list = []
+
+    def repace(plan, pace, output_id=None):
+        calls.append((pace, output_id))
+        seg = plan.output(output_id).find("d004")[1]
+        seg.start += 0.2  # 把长停顿的剪口往后挪：多留 0.2s
+        plan.output(output_id).find("d003")[1].end += 0.2
+        return 2
+
+    _stub_repace(monkeypatch, repace)
+    d = _get(srv)
+    status, r = jcall(srv, "POST", "/api/repace", {"pace": "relaxed", "revision": d["revision"], "etag": d["etag"], "output_id": "main"})
+    assert status == 200, r
+    assert r["changed"] == 2 and calls == [("relaxed", "main")]
+    assert r["revision"] == d["revision"] + 1
+    on_disk = Plan.load(plan_path)
+    assert on_disk.revision == r["revision"]
+    assert on_disk.options["pace"] == "relaxed"
+    assert on_disk.output().find("d004")[1].start == pytest.approx(9.45)
+    assert r["plan"]["outputs"][0]["segments"][3]["start"] == pytest.approx(9.45)
+    # 数字秒数也行；revision 过期 → 409，磁盘不动
+    status, r2 = jcall(srv, "POST", "/api/repace", {"pace": 0.3, "revision": d["revision"]})
+    assert status == 409 and r2["code"] == "conflict"
+    assert Plan.load(plan_path).options["pace"] == "relaxed"
+
+
+def test_repace_errors_are_reported_not_saved(srv: ReviewServer, plan_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    d = _get(srv)
+
+    def bad_pace(plan, pace, output_id=None):
+        raise ValueError(f"pace={pace!r} 不认识；可选 tight / natural / relaxed")
+
+    _stub_repace(monkeypatch, bad_pace)
+    status, r = jcall(srv, "POST", "/api/repace", {"pace": "fast", "revision": d["revision"]})
+    assert status == 400 and r["code"] == "invalid_pace" and "不认识" in r["error"]
+
+    def breaks_plan(plan, pace, output_id=None):
+        plan.output(output_id).segments[0].end = -1  # 写出不合法的方案
+        return 1
+
+    _stub_repace(monkeypatch, breaks_plan)
+    status, r = jcall(srv, "POST", "/api/repace", {"pace": "tight", "revision": d["revision"]})
+    assert status == 500 and r["code"] == "repace_invalid" and "没有保存" in r["error"]
+    assert Plan.load(plan_path).revision == d["revision"]  # 磁盘没被写坏
+
+    assert jcall(srv, "POST", "/api/repace", {"pace": True, "revision": d["revision"]})[0] == 400
+    assert jcall(srv, "POST", "/api/repace", {"revision": d["revision"]})[0] == 400
+
+
+def test_repace_module_missing_is_503(srv: ReviewServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    import autocut.recipes.cut as cut
+
+    monkeypatch.delattr(cut, "repace", raising=False)
+    d = _get(srv)
+    status, r = jcall(srv, "POST", "/api/repace", {"pace": "tight", "revision": d["revision"]})
+    assert status == 503 and "节奏模块不可用" in r["error"]
+    assert d["capabilities"]["repace"] is False
+
+
+def test_real_repace_skips_edited_and_locked_gaps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """用真实的 cut 配方和 repace：锁定的停顿不动，没锁的按新节奏变；页面说的“锁定的会保留”和实际行为一致。"""
+    cut = pytest.importorskip("autocut.recipes.cut")
+    if not hasattr(cut, "repace"):
+        pytest.skip("recipes.cut.repace 还没合并")
+    monkeypatch.setenv("AUTOCUT_CACHE", str(ROOT / "fixtures" / "media" / ".autocut-cache"))
+    try:
+        built = cut.build([TALK])
+    except Exception as e:  # noqa: BLE001 —— 没有语音识别模型时配方起不来
+        pytest.skip(f"cut.build 不可用：{e}")
+    gaps = [s for s in built.output().segments if s.evidence.get("gap_span")]
+    if len(gaps) < 2:
+        pytest.skip("这份方案没有可重排的停顿")
+    built.path = tmp_path / "talk.autocut.json"
+    locked = gaps[0]
+    locked.locked = True
+    built.save()
+    with make_server(built.path) as s:
+        d = _get(s)
+        status, r = jcall(s, "POST", "/api/repace", {"pace": "relaxed", "revision": d["revision"], "etag": d["etag"]})
+        assert status == 200, r
+        after = Plan.load(built.path)
+        assert after.options["pace"] == "relaxed" and after.options["keep_pause"] == 0.8
+        new_locked = after.output().find(locked.id)[1]
+        assert (new_locked.start, new_locked.end, new_locked.action) == (locked.start, locked.end, locked.action)
+        assert r["changed"] > 0
+        assert after.output().segments[-1].end == pytest.approx(built.output().segments[-1].end)  # 首尾仍然相接，没丢内容
+
+
+def test_captions_endpoint_uses_cues_for_and_never_triggers_asr(srv: ReviewServer, plan_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    status, r = jcall(srv, "GET", "/api/captions?output=main")
+    assert status == 200 and r["has_words"] is True and r["output"] == "main"
+    assert r["cues"] and r["cues"][0]["text"] == "大家好"  # 方案里的文字稿只有“大家好”
+    assert r["cues"][0]["start"] == pytest.approx(0.12, abs=0.05)
+    assert r["enabled"] is True and r["burn"] is False
+    assert jcall(srv, "GET", "/api/captions?output=nope")[0] == 400
+
+    # 没有逐词文字稿：不调用 cues_for（它在没有缓存时会跑语音识别），告诉页面原因
+    raw = json.loads(plan_path.read_text())
+    del raw["sources"]["main"]["words"]
+    plan_path.write_text(json.dumps(raw))
+    import autocut.captions as captions
+
+    def boom(plan, output):
+        raise AssertionError("没有文字稿时不该调用 cues_for")
+
+    monkeypatch.setattr(captions, "cues_for", boom)
+    status, r = jcall(srv, "GET", "/api/captions")
+    assert status == 200 and r["cues"] == [] and r["has_words"] is False and "没有逐词文字稿" in r["reason"]
+
+
+def test_render_passes_loudnorm_option_only_when_given(srv: ReviewServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict] = []
+
+    def render(plan, output_ids=None, progress=None, loudnorm="unset"):
+        seen.append({"loudnorm": loudnorm})
+        return []
+
+    _fake(monkeypatch, "render", render=render)
+    for body, expect in (({}, "unset"), ({"options": {"loudnorm": None}}, "unset"), ({"options": {"loudnorm": True}}, True), ({"options": {"loudnorm": False}}, False), ({"options": {"loudnorm": -16}}, -16)):
+        status, r = jcall(srv, "POST", "/api/render", body)
+        assert status == 202, body
+        _wait_job(srv, r["job"])
+        assert seen[-1]["loudnorm"] == expect, body
+    assert jcall(srv, "POST", "/api/render", {"options": {"loudnorm": "loud"}})[0] == 400
+    assert jcall(srv, "POST", "/api/render", {"options": [1]})[0] == 400
+
+
+def test_merged_save_after_409_keeps_both_sides(srv: ReviewServer, plan_path: Path) -> None:
+    """页面做三方合并时走的服务器流程：保存撞上 409 → 用 409 带回的磁盘版本合并 → 以磁盘 revision 再保存，两边的改动都在。"""
+    d = _get(srv)
+    mine = copy.deepcopy(d["plan"])
+    mine["outputs"][0]["segments"][5]["action"] = "keep"  # 我：把“嗯”改回保留
+    agent = Plan.load(plan_path)
+    agent.set_action("d004", "keep")  # agent：把长停顿改回保留
+    agent.save()
+    status, r = jcall(srv, "PUT", "/api/plan", {"revision": d["revision"], "plan": mine})
+    assert status == 409
+    disk = r["disk"]
+    merged = copy.deepcopy(disk["plan"])
+    merged["outputs"][0]["segments"][5]["action"] = "keep"  # 合并 = agent 的版本 + 我的改动
+    status, r2 = jcall(srv, "PUT", "/api/plan", {"revision": disk["revision"], "etag": disk["etag"], "plan": merged})
+    assert status == 200 and r2["revision"] == disk["revision"] + 1
+    final = Plan.load(plan_path)
+    assert final.output().find("d004")[1].action == "keep" and final.output().find("d006")[1].action == "keep"
+
+
+def test_many_parallel_connections_are_not_reset(srv: ReviewServer) -> None:
+    """页面一次并行拉十几个模块：监听队列太小会 ERR_CONNECTION_RESET（审阅页白屏）。"""
+    assert srv.request_queue_size >= 64
+    errors: list[str] = []
+
+    def hit() -> None:
+        try:
+            status, _, _ = call(srv, "GET", "/api/plan/status")
+            assert status == 200
+        except Exception as e:  # noqa: BLE001
+            errors.append(repr(e))
+
+    threads = [threading.Thread(target=hit) for _ in range(60)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert errors == []

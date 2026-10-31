@@ -155,7 +155,8 @@ def test_game_commentary(media: Path, truth) -> None:
         elif s.get("tag") == "action":
             assert coverage(kept, a, b) / (b - a) >= 0.9, s
             acts = [x for x in segs if x.reason == "action" and x.action == "keep" and x.start < b and x.end > a]
-            assert acts and 0.6 <= acts[0].confidence < 0.8 and "爆发" in acts[0].detail, acts
+            assert acts and acts[0].confidence >= 0.75 and "爆发" in acts[0].detail, acts
+            assert acts[0].evidence["a_audio"] > 0.5 and acts[0].evidence["video_cuts"] > 0
         elif s.get("tag") == "boring":
             assert coverage(kept, a, b) <= 1.0, s
             assert any(x.reason == "idle" and x.action == "cut" and x.start < b and x.end > a for x in segs)
@@ -279,7 +280,8 @@ def test_filler_without_pause_cuts_at_energy_dips(tmp_path: Path, monkeypatch: p
     f = filler[0]
     assert 1.0 - 0.011 <= f.start <= 1.06 + 0.011, f
     assert 1.36 - 0.011 <= f.end <= 1.42 + 0.011, f
-    assert f.confidence == 0.8 and "能量最低" in f.detail
+    # 两侧都紧贴着实词：剪口只能落在词间低谷，可能带走字头字尾 → 拿不准
+    assert f.confidence < 0.75 and f.evidence["f_iso"] == 0.75 and "能量最低" in f.detail
     # 1.5s 的停顿被剪到 0.4s，剪口不碰说话
     long_gap = coverage(_kept(plan), 2.0, 3.5)
     assert long_gap == pytest.approx(0.4, abs=0.1)
@@ -365,3 +367,227 @@ def test_bad_options(kw: dict[str, Any], msg: str, tmp_path: Path) -> None:
 def test_pace_seconds() -> None:
     assert cut._pace_seconds("Tight") == 0.15 and cut._pace_seconds(0.3) == 0.3
     assert cut._sec(0.4) == "0.4s" and cut._sec(0.15) == "0.15s" and cut._sec(2.6) == "2.6s"
+
+
+# ------------------------------------------------------------------ 把握度：由证据计算
+
+
+@pytest.mark.unit
+def test_silence_confidence_follows_evidence() -> None:
+    thr = cut.PACES["natural"] + cut.SLACK
+    just_over, _ = cut.silence_confidence(thr + 0.05, thr, "sentence_end")
+    clear, _ = cut.silence_confidence(2.6, thr, "sentence_end")
+    question, _ = cut.silence_confidence(2.6, thr, "question")
+    noisy, parts = cut.silence_confidence(2.6, thr, "sentence_end", level=0.95)
+    assert just_over < 0.75 < 0.9 < clear
+    assert question < clear and noisy < clear and parts["f_quiet"] < 1
+    # 中等长度的停顿：句末有把握、问句之后拿不准
+    assert cut.silence_confidence(1.0, thr, "sentence_end")[0] >= 0.75 > cut.silence_confidence(0.75, thr, "question")[0]
+    # 保留短停顿：错了代价很小，不送去"拿不准"
+    assert cut.pause_confidence(thr - 0.01, thr) >= 0.9 and cut.pause_confidence(0.3, thr) > 0.9
+
+
+@pytest.mark.unit
+def test_retake_confidence_follows_evidence() -> None:
+    sim_only, _ = cut.retake_confidence(0.7, None, longer=True)
+    marked, _ = cut.retake_confidence(0.9, "strong", longer=True)
+    guessed, parts = cut.retake_confidence(0.3, "strong", longer=True, extent_known=False)
+    assert sim_only < 0.75 < 0.9 < marked
+    assert guessed < 0.75 and parts["f_extent"] < 1
+    assert cut.retake_confidence(1.0, None, longer=True)[0] > 0.9  # 后一遍从头重复了前一遍、而且说得更多
+
+
+@pytest.mark.unit
+def test_filler_confidence_follows_evidence() -> None:
+    low_p, _ = cut.filler_confidence("core", 0.2, True, True)
+    clear, _ = cut.filler_confidence("core", 0.9, True, True)
+    attached, _ = cut.filler_confidence("core", 0.9, False, False)
+    assert low_p < 0.75 < 0.9 < clear
+    assert attached < 0.75  # 两侧都紧贴实词
+    assert cut.filler_confidence("soft", 0.9, True, True)[0] < 0.75  # 啊 / ah 也可能是有意义的感叹
+
+
+@pytest.mark.unit
+def test_game_confidence_follows_evidence() -> None:
+    weak, _ = cut.action_confidence(6.5, 0)
+    strong, _ = cut.action_confidence(15.0, 6)
+    assert 0.5 <= weak < 0.75 < 0.9 < strong
+    assert cut.idle_confidence(0.0, 0, True)[0] > 0.85
+    assert cut.idle_confidence(5.0, 0, True)[0] < 0.75  # 差一点就算爆发
+    assert cut.idle_confidence(0.0, 2, True)[0] < cut.idle_confidence(0.0, 0, True)[0]
+
+
+@pytest.mark.unit
+def test_judge_borderline_cases_are_uncertain() -> None:
+    """没有标记、相似度 ≈0.67 的重说，和 whisper 概率低的「嗯」，都进"拿不准"。"""
+    (d,) = cut.judge(_ws("我们先打开这个软件，我们先打开那个工具然后导入素材。"))
+    assert d.reason == "retake" and 0.6 <= d.evidence["similarity"] < 0.75 and d.confidence < 0.75
+    ws = _ws("首先准备素材，嗯，然后打开软件。")
+    next(w for w in ws if w["text"] == "嗯")["p"] = 0.2
+    (f,) = cut.judge(ws)
+    assert f.reason == "filler" and f.confidence < 0.75 and "p=0.20" in f.detail
+    (clear,) = cut.judge(_ws("首先准备素材，嗯，然后打开软件。"))
+    assert clear.confidence > 0.9
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("name", ["talk_zh", "lecture_en", "game_commentary"])
+def test_correct_cuts_are_confident_at_natural(media: Path, name: str) -> None:
+    """合成素材上判断正确的刀都 ≥ 0.75，分项写进了 evidence。"""
+    plan = _build(media, name)
+    cuts = [s for s in plan.outputs[0].segments if s.action == "cut"]
+    assert cuts and all(s.confidence >= 0.75 for s in cuts), [(s.id, s.confidence, s.detail) for s in cuts]
+    for s in cuts:
+        keys = {"silence": "m", "idle": "q_audio", "retake": "e_sim", "filler": "f_p"}
+        assert keys[s.reason] in s.evidence, s
+
+
+@pytest.mark.integration
+def test_tight_pace_mid_sentence_pauses_are_uncertain(media: Path) -> None:
+    """tight 节奏把句子中间 0.3s 的逗号停顿剪到 0.15s：刚过阈值、又停在句中 → 拿不准；句末的长停顿仍然有把握。"""
+    segs = _build(media, "talk_zh", pace="tight").outputs[0].segments
+    mid = [s for s in segs if s.reason == "silence" and s.evidence["context"] == "mid_sentence"]
+    long = [s for s in segs if s.reason == "silence" and s.evidence["gap"] >= 1.0]
+    assert mid and all(s.confidence < 0.75 and "句子中间" in s.detail for s in mid)
+    assert long and all(s.confidence > 0.9 for s in long)
+
+
+@pytest.mark.unit
+def test_question_pause_is_uncertain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """问句之后 0.75s 的停顿（可能是留给观众想的）拿不准；句号之后 2s 的停顿有把握。"""
+    sr, rng = 16000, np.random.default_rng(1)
+    layout = [("v", 1.0), ("s", 0.75), ("v", 1.0), ("s", 2.0), ("v", 0.6), ("s", 0.3)]
+    level = {"s": 10 ** (-60 / 20), "v": 10 ** (-18 / 20)}
+    wav = _write_wav(tmp_path / "q.wav", np.concatenate([rng.standard_normal(int(d * sr)) * level[k] for k, d in layout]))
+    words = [
+        {"text": "你觉得呢", "start": 0.0, "end": 1.0, "p": 1.0}, {"text": "？", "start": 1.0, "end": 1.0, "p": 1.0},
+        {"text": "我觉得可以", "start": 1.75, "end": 2.75, "p": 1.0}, {"text": "。", "start": 2.75, "end": 2.75, "p": 1.0},
+        {"text": "好", "start": 4.75, "end": 5.35, "p": 1.0}, {"text": "。", "start": 5.35, "end": 5.35, "p": 1.0},
+    ]
+    monkeypatch.setenv("AUTOCUT_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setattr(transcribe, "available", lambda: True)
+    monkeypatch.setattr(Media, "words", lambda self, language=None, track=None: words)
+    segs = cut.build([wav]).outputs[0].segments
+    q = next(s for s in segs if s.reason == "silence" and s.start < 1.75 and s.end > 1.0)
+    e = next(s for s in segs if s.reason == "silence" and s.start < 4.75 and s.end > 2.75)
+    assert q.evidence["context"] == "question" and q.confidence < 0.75 and "问句" in q.detail
+    assert e.evidence["context"] == "sentence_end" and e.confidence > 0.9
+
+
+# ------------------------------------------------------------------ repace：不重新分析，换节奏
+
+
+def _copy(plan: Plan) -> Plan:
+    """模拟审阅页：方案存成 JSON 再读回来。"""
+    return Plan.from_dict(plan.to_dict(), path=plan.path)
+
+
+def _check_invariants(plan: Plan, duration: float) -> None:
+    _check_contract(plan, duration)
+    for s in plan.outputs[0].segments:
+        if span := s.evidence.get("gap_span"):
+            assert span[0] - 1e-6 <= s.start <= span[1] + 1e-6, s  # 剪口都在原来的停顿里，不越过说话
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("name", ["talk_zh", "lecture_en", "game_commentary"])
+def test_repace_monotonic_and_matches_build(media: Path, truth, name: str) -> None:
+    base = _build(media, name)
+    tr = truth(name)
+    durs = {}
+    for pace in ("tight", "natural", "relaxed"):
+        plan = _copy(base)
+        n = cut.repace(plan, pace)
+        assert (n == 0) == (pace == "natural")
+        assert plan.options["pace"] == pace and plan.options["keep_pause"] == cut.PACES[pace]
+        _check_invariants(plan, tr["duration"])
+        assert len(plan.outputs[0].segments) == len(_build(media, name, pace=pace).outputs[0].segments)
+        built = _build(media, name, pace=pace).outputs[0].duration
+        assert plan.outputs[0].duration == pytest.approx(built, abs=0.5)  # 只差吸附（build 吸附到能量最低点）
+        keep = cut.PACES[pace]
+        kept = _kept(plan)
+        for s in tr["segments"]:
+            if s["kind"] == "speech" and "tag" not in s:
+                # truth 的一句话里含逗号停顿；tight 会把 0.3s 的逗号停顿剪到 0.15s（剪口仍在停顿里，见 _check_invariants）
+                cov = coverage(kept, s["start"], s["end"]) / (s["end"] - s["start"])
+                assert cov >= (0.85 if pace == "tight" else 0.95), (pace, s, cov)
+            elif s["end"] - s["start"] >= 1.0 and s.get("tag") != "action":
+                assert coverage(kept, s["start"], s["end"]) <= keep + 0.15, (pace, s)
+        durs[pace] = plan.outputs[0].duration
+    log.info("%s repace 时长 %s", name, durs)
+    assert durs["tight"] < durs["natural"] < durs["relaxed"]
+
+
+@pytest.mark.integration
+def test_repace_is_idempotent_and_reversible(media: Path) -> None:
+    base = _build(media, "talk_zh")
+    plan = _copy(base)
+    assert cut.repace(plan, "tight") > 0
+    snapshot = plan.to_dict()
+    assert cut.repace(plan, "tight") == 0 and plan.to_dict() == snapshot
+    assert cut.repace(plan, "relaxed") > 0
+    cut.repace(plan, "natural")
+    for a, b in zip(plan.outputs[0].segments, base.outputs[0].segments):
+        assert (a.id, a.action, a.reason) == (b.id, b.action, b.reason)
+        assert a.start == pytest.approx(b.start, abs=cut.SNAP_WINDOW + 1e-6)
+    plan.validate()
+
+
+@pytest.mark.integration
+def test_repace_leaves_human_edits_alone(media: Path) -> None:
+    """人改过的片段原样保留；它所在的停顿里的剪口也不动（相邻片段在这一侧的边界不变）。"""
+    plan = _copy(_build(media, "talk_zh"))
+    segs = plan.outputs[0].segments
+    silences = [s for s in segs if s.reason == "silence" and s.evidence.get("context") == "sentence_end"]
+    restored, dragged = silences[0], silences[1]
+    plan.set_action(restored.id, "keep")  # 人把一处长停顿改回保留
+    plan.move_boundary(dragged.id, "start", dragged.start + 0.1)  # 人拖了另一处的边界
+    locked = next(s for s in segs if s.reason == "pause")
+    locked.locked = True
+    speech = segs[segs.index(silences[2]) + 1]  # 人把长停顿后面那句话剪掉了：它前面的停顿也不能动
+    plan.set_action(speech.id, "cut")
+    frozen = [restored, dragged, locked, speech, silences[2]]
+    before = {s.id: (s.start, s.end, s.action, s.reason, s.confidence, s.detail) for s in frozen}
+    assert cut.repace(plan, "relaxed") > 0
+    assert {s.id: (s.start, s.end, s.action, s.reason, s.confidence, s.detail) for s in frozen} == before
+    _check_invariants(plan, plan.sources["talk_zh"].duration)
+    # 没被人碰过的停顿照常换了节奏
+    other = [s for s in segs if s.reason == "silence" and s not in frozen]
+    assert other and all(s.evidence["threshold"] == pytest.approx(_thr_relaxed(s)) for s in other)
+
+
+def _thr_relaxed(s) -> float:
+    return 0.5 if s.evidence["context"] == "edge" else 0.9
+
+
+@pytest.mark.integration
+def test_repace_updates_reasons_and_confidence(media: Path) -> None:
+    """natural 下保留的逗号停顿，换成 tight 后变成"剪掉 · 拿不准"；换回 natural 又变成保留。"""
+    plan = _copy(_build(media, "talk_zh"))
+    pauses = [s.id for s in plan.outputs[0].segments if s.reason == "pause"]
+    cut.repace(plan, "tight")
+    now = {s.id: s for s in plan.outputs[0].segments}
+    assert all(now[i].action == "cut" and now[i].reason == "silence" and now[i].confidence < 0.75 for i in pauses)
+    assert all("保留 0.15s" in now[i].detail for i in pauses)
+    cut.repace(plan, "natural")
+    assert all(now[i].action == "keep" and now[i].reason == "pause" and now[i].confidence >= 0.9 for i in pauses)
+
+
+@pytest.mark.unit
+def test_repace_rejects_other_recipes_and_bad_pace(media: Path) -> None:
+    plan = _copy(_build(media, "talk_zh"))
+    with pytest.raises(RecipeError, match="tight"):
+        cut.repace(plan, "fast")
+    plan.recipe = "montage"
+    with pytest.raises(RecipeError, match="cut 配方"):
+        cut.repace(plan, "tight")
+
+
+@pytest.mark.unit
+def test_repace_refuses_plans_without_gap_records(media: Path) -> None:
+    """旧版方案没有 gap_span：明确报错，不悄悄什么都不做。"""
+    plan = _copy(_build(media, "talk_zh"))
+    for s in plan.outputs[0].segments:
+        s.evidence.pop("gap_span", None)
+    with pytest.raises(RecipeError, match="gap_span"):
+        cut.repace(plan, "tight")
