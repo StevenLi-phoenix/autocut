@@ -30,9 +30,11 @@ def guard_uncertain(plan_path: Path, below: float) -> dict[str, Any]:
     plan = Plan.load(plan_path)
     n, secs = 0, 0.0
     for seg in plan.output().segments:
-        if seg.action == "cut" and seg.confidence < below and not seg.locked:
+        mid = "句子中间" in seg.detail  # 配方已标出"停在句子中间"：置信度再高也不在无人核对时冒险
+        if seg.action == "cut" and (seg.confidence < below or mid) and not seg.locked:
             seg.action = "keep"
-            seg.detail = f"{seg.detail}（流水线保守策略：把握度 {seg.confidence:.2f} < {below}，改为保留）".strip()
+            why = "停在句子中间" if mid and seg.confidence >= below else f"把握度 {seg.confidence:.2f} < {below}"
+            seg.detail = f"{seg.detail}（流水线保守策略：{why}，改为保留）".strip()
             seg.evidence["guard_restored"] = True
             n += 1
             secs += seg.out_duration
@@ -73,10 +75,15 @@ def run_cut(ctx: Ctx) -> dict[str, Any]:
     cut = ctx.autocut("cut", args)
     summ = cut.get("summary", {})
 
-    guard = {"restored": 0, "seconds": 0.0}
+    guard: dict[str, Any] = {"restored": 0, "seconds": 0.0}
     if o.get("conservative", True):
         ctx.stage("guard", "拿不准的剪法一律改成保留")
         guard = guard_uncertain(ctx.path(plan), float(o.get("uncertain_below", UNCERTAIN_BELOW)))
+
+    from autocut.plan import Plan  # noqa: PLC0415
+
+    after = Plan.load(ctx.path(plan)).summary()["outputs"][0]
+    summ = {**summ, **{k: v for k, v in after.items() if k in ("duration", "removed", "cut", "source_span")}}
 
     ctx.stage("check-plan", platform)
     chk = ctx.autocut("check", [plan, "--platform", platform, "--no-asr"], allow_fail=True)
@@ -98,7 +105,7 @@ def run_cut(ctx: Ctx) -> dict[str, Any]:
     risks = [i for i in (chk.get("items") or []) if i.get("severity") in ("risk", "warn")][:5] if chk.get("ok") else []
     summary_lines = [
         f"{summ.get('source_span', 0):.0f}s → {summ.get('duration', 0):.0f}s，剪掉 {summ.get('removed', 0):.0f}s（{summ.get('cut', {})}）",
-        f"拿不准 {summ.get('uncertain_total', 0)} 处，其中 {guard['restored']} 处剪法被保守策略改回保留（多保留 {guard['seconds']:.0f}s），没有逐条人工核对",
+        f"拿不准 {summ.get('uncertain_total', 0)} 处，其中 {guard['restored']} 处（含停在句子中间的）剪法被保守策略改回保留（多保留 {guard['seconds']:.0f}s），没有逐条人工核对",
         f"出片核验：{verify}",
     ]
     if chk.get("ok") and risks:

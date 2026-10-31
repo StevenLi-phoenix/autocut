@@ -78,14 +78,15 @@ def test_guard_uncertain_restores_low_confidence_cuts(tmp_path: Path) -> None:
     from autocut.worker.pipe_cut import guard_uncertain
 
     segs = [Segment("d1", "a", 0, 2, "keep", "speech", 1.0), Segment("d2", "a", 2, 4, "cut", "silence", 0.5),
-            Segment("d3", "a", 4, 6, "cut", "silence", 0.9), Segment("d4", "a", 6, 7, "cut", "retake", 0.7, locked=True)]
-    plan = Plan("cut", {"a": Source("a", "a.mp4", "video", 7.0)}, [Output("main", segs)])
+            Segment("d3", "a", 4, 6, "cut", "silence", 0.9), Segment("d4", "a", 6, 7, "cut", "retake", 0.7, locked=True),
+            Segment("d5", "a", 7, 8, "cut", "silence", 0.95, detail="停顿 0.9s；停在句子中间")]
+    plan = Plan("cut", {"a": Source("a", "a.mp4", "video", 8.0)}, [Output("main", segs)])
     p = tmp_path / "p.autocut.json"
     plan.save(p)
     r = guard_uncertain(p, 0.75)
-    assert r["restored"] == 1 and r["seconds"] == 2.0
+    assert r["restored"] == 2 and r["seconds"] == 3.0
     again = Plan.load(p)
     acts = {s.id: s.action for s in again.output().segments}
-    assert acts == {"d1": "keep", "d2": "keep", "d3": "cut", "d4": "cut"}  # 高置信和锁定的不动
+    assert acts == {"d1": "keep", "d2": "keep", "d3": "cut", "d4": "cut", "d5": "keep"}  # 高置信和锁定的不动
     assert any("保守策略" in n for n in again.notes) and again.revision == 2
     assert guard_uncertain(p, 0.75)["restored"] == 0  # 幂等
