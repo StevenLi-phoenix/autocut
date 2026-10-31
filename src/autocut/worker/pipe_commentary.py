@@ -87,7 +87,7 @@ def run_commentary(ctx: Ctx, *, gateway: Gateway | None = None, tts: TTS | None 
     except Exception as e:  # noqa: BLE001
         log.warning("取原声文字稿失败（继续，当作原声没人说话）：%s", e)
     speech = C.speech_intervals(words, out)
-    max_lines = int(o.get("max_lines") or max(4, round(D / 60 * float(o.get("lines_per_min", 7)))))
+    max_lines = int(o.get("max_lines") or max(4, round(D / 60 * float(o.get("lines_per_min", 5)))))
     script = gw.chat_json(WRITER_MODEL, [{"role": "user", "content": C.script_prompt(D, frames, speech, hint=hint, style=style, max_lines=max_lines, lang_name=lang_name)}],
                           purpose="script", validate=C.validate_script(D, max_lines), max_tokens=3000, temperature=0.8)
     lines = C.clean_lines(script["lines"], D)
