@@ -399,3 +399,11 @@ def test_montage_needs_music(app: App) -> None:
     ingest.register_source(app.store, job, {"kind": "upload", "file": "src/a.mp4"})
     r = wait(app, job, start(app, job, "montage_prepare", {}, lambda c: pipe_montage.run_prepare(c, gateway=_MontageEyes()))["id"], 30)
     assert r["status"] == "failed" and r["result"]["error"]["code"] == "no_music"
+
+
+def test_review_thresholds_can_be_relaxed_but_say_so() -> None:
+    from autocut.worker import pipe_clips  # noqa: PLC0415
+
+    rv = {"hook": 3, "standalone": 2, "arc": 3, "density": 2, "safety": 5, "fit": 3}
+    assert not pipe_clips.passes(rv) and pipe_clips.passes(rv, 2, 18)
+    assert not pipe_clips.passes({**rv, "sensitive": ["x"]}, 1, 1)  # 敏感词命中永远不过

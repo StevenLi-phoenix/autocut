@@ -56,9 +56,9 @@ def validate_review(obj: Any) -> None:
         obj[d] = v
 
 
-def passes(rv: dict[str, Any]) -> bool:
+def passes(rv: dict[str, Any], min_each: int = PASS_MIN, min_total: int = PASS_TOTAL) -> bool:
     scores = [rv[d] for d in DIMS]
-    return min(scores) >= PASS_MIN and sum(scores) >= PASS_TOTAL and not rv.get("sensitive")
+    return min(scores) >= min_each and sum(scores) >= min_total and not rv.get("sensitive")
 
 
 def qa_prompt() -> str:
@@ -102,6 +102,7 @@ def run_review(ctx: Ctx, *, gateway: Gateway | None = None) -> dict[str, Any]:
     if unknown:
         raise PipelineError("unknown_output", f"方案里没有这些候选：{unknown}", f"可选：{[o.id for o in plan.outputs]}", "")
     banned = _banned(ctx.app.cfg, ctx.opts)
+    min_each, min_total = int(ctx.opts.get("min_each", PASS_MIN)), int(ctx.opts.get("min_total", PASS_TOTAL))  # 放宽门槛要用户同意；摘要里会写明
     path = ctx.dir / "work" / "review.json"
     store = read_json(path, {})
     ctx.stage("review", f"{len(ids)} 条候选交给独立评审")
@@ -115,14 +116,15 @@ def run_review(ctx: Ctx, *, gateway: Gateway | None = None) -> dict[str, Any]:
         if hit:
             rv["sensitive"] = hit
             rv.setdefault("problems", []).append(f"命中敏感词：{'、'.join(hit[:3])}")
-        rv["pass"] = passes(rv)
+        rv["pass"] = passes(rv, min_each, min_total)
+        rv["thresholds"] = [min_each, min_total]
         rv["range"] = [round(out.segments[0].start, 2), round(out.segments[0].end, 2)]
         out_rows[oid] = rv
         store[f"{rel}#{oid}"] = {**rv, "t": ctx.t0}
     atomic_write_json(path, store)
     passed = [i for i, r in out_rows.items() if r["pass"]]
     failed = {i: {"scores": {d: r[d] for d in DIMS}, "total": r["total"], "problems": r.get("problems", [])} for i, r in out_rows.items() if not r["pass"]}
-    return {"ok": True, "state": "reviewed", "passed": passed, "failed": failed, "threshold": f"每个维度 ≥{PASS_MIN} 且总分 ≥{PASS_TOTAL}/30 且无敏感词",
+    return {"ok": True, "state": "reviewed", "passed": passed, "failed": failed, "threshold": f"每个维度 ≥{min_each} 且总分 ≥{min_total}/30 且无敏感词" + ("（已放宽，默认 3 / 20）" if (min_each, min_total) != (PASS_MIN, PASS_TOTAL) else ""),
             "reviews": {i: {"scores": {d: r[d] for d in DIMS}, "total": r["total"], "pass": r["pass"], "problems": r.get("problems", [])} for i, r in out_rows.items()},
             "next": [{"cmd": f"autocut-remote pipeline {ctx.job_id} clips_deliver plan={rel} select='{json.dumps(passed[:3])}' backups='[]'", "why": "选定过关的候选交付（渲染+QA+预览，等用户确认）"}] if passed
             else [{"cmd": "按 failed 里的问题重新提名（换起句、避开悬空开头），再 clips_review", "why": "没有候选过关；不要降低标准"}]}
@@ -221,6 +223,9 @@ def run_deliver(ctx: Ctx, *, gateway: Gateway | None = None) -> dict[str, Any]:
     lines = [f"从 {mmss(src_dur)} 的长视频里交付 {len(final_ids)} 条竖屏短片（要 {need} 条）" + (f"，另备 {len(spare)} 条备选，可一键替换" if spare else ""),
              *[f"- {d['title']}（原片 {d['at']} 起，{d['dur']}s，评审 {d['review']}/30）：{d['reason'][:60]}" for d in deliverables if d["role"] == "main"],
              "选段由 DSH agent 做出，程序做硬约束校验、不同模型独立评审、渲染核验和抽帧 QA；竖屏为居中裁切" + ("；通过率偏低，已切换多备选模式" if degraded else "")]
+    relaxed = {tuple(review[f"{rel}#{i}"].get("thresholds", [PASS_MIN, PASS_TOTAL])) for i in final_ids} - {(PASS_MIN, PASS_TOTAL)}
+    if relaxed:
+        lines.append(f"⚠️ 独立评审门槛被放宽到 {sorted(relaxed)}（默认每维度 ≥{PASS_MIN}、总分 ≥{PASS_TOTAL}/30）：这些片段按默认标准是不过关的，请用户重点看")
     if len(final_ids) < need:
         lines.append(f"只交付了 {len(final_ids)} 条（要 {need} 条）：没有降低标准凑数")
     if qa_notes:
