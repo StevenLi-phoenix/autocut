@@ -1,4 +1,4 @@
-"""DSH 事件：流水线结束时 POST 到 DSH 的 /hooks/lsy（source=autocut），主 agent 被唤醒后把预览发给用户 / 说明失败原因。
+"""DSH 事件：流水线结束时 POST 到 DSH 的 /hooks/lsy（source=autocut）：autocut.needs_agent（准备好了，等 agent 做判断）、autocut.ready（成片等用户确认）、autocut.failed。
 
 事件文字只描述"发生了什么 + 去哪看"，不含任何指令；agent 回 worker 取摘要（status / run）。失败不影响流水线本身（只记日志）。
 """
@@ -24,6 +24,9 @@ def event_for(job_id: str, run: dict[str, Any]) -> dict[str, Any] | None:
     name = run.get("cmd", "")
     res = run.get("result") or {}
     key = f"{job_id}-{run['id']}"
+    if run["status"] == "ok" and res.get("state") == "needs_agent":
+        return {"kind": "autocut.needs_agent", "key": key, "subject": job_id, "title": f"autocut {name} 准备好了，等你做判断：{res.get('needs', '')}（job {job_id}）",
+                "text": f"run {run['id']}；用 `autocut-remote wait {job_id} {run['id']}` 读 brief，按 autocut skill 做判断后提交对应的 *_finish 流水线"}
     if run["status"] == "ok" and res.get("state") == "awaiting_confirmation":
         n = len(res.get("deliverables") or [])
         return {"kind": "autocut.ready", "key": key, "subject": job_id, "title": f"autocut {name} 完成，{n} 条成片等用户确认（job {job_id}）",

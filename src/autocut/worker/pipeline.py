@@ -23,9 +23,9 @@ log = logging.getLogger(__name__)
 
 
 class PipelineError(Exception):
-    def __init__(self, code: str, message: str, fix: str = "", stage: str = "") -> None:
+    def __init__(self, code: str, message: str, fix: str = "", stage: str = "", details: Any = None) -> None:
         super().__init__(message)
-        self.code, self.message, self.fix, self.stage = code, message, fix, stage
+        self.code, self.message, self.fix, self.stage, self.details = code, message, fix, stage, details
 
 
 class PipelineCancelled(Exception):
@@ -104,7 +104,10 @@ def start(app: App, job_id: str, name: str, opts: dict[str, Any], fn: Callable[[
         except PipelineCancelled:
             run["status"] = "cancelled"
         except PipelineError as e:
-            run.update(status="failed", result={"ok": False, "error": {"code": e.code, "message": e.message, "fix": e.fix, "stage": e.stage}})
+            err = {"code": e.code, "message": e.message, "fix": e.fix, "stage": e.stage}
+            if e.details is not None:
+                err["details"] = e.details
+            run.update(status="failed", result={"ok": False, "error": err})
         except Exception as e:  # noqa: BLE001
             from autocut.worker.llm import LLMError  # noqa: PLC0415
 

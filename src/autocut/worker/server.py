@@ -85,7 +85,7 @@ class App:
         sub = rest[1:]
         if not sub:
             return 200, {"ok": True, "job": job, "provenance": ingest.read_json(d / "provenance.json", {"sources": []}),
-                         "state": delivery.state(self.store, job_id).get("status"), "files": self._files(d), "runs": [self._run_brief(r) for r in self.store.list_runs(job_id)[-20:]]}
+                         "state": delivery.state(self.store, job_id).get("status"), "rejections": delivery.rejection_context(self.store, job_id), "files": self._files(d), "runs": [self._run_brief(r) for r in self.store.list_runs(job_id)[-20:]]}
         if sub == ["ingest"] and method == "POST":
             return 200, {"ok": True, "run": self._ingest(job_id, body)}
         if sub == ["run"] and method == "POST":

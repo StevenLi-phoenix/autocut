@@ -114,3 +114,17 @@ def test_truncated_ending_detected() -> None:
 def test_late_opening_flagged(ctx: ClipContext) -> None:
     v = check(ctx, 1, 1, 15.0, 55.0, "gap", "gap", length=(20, 60))
     assert any(x["code"] == "late_opening" for x in v)
+
+
+def test_dangling_opening_is_a_hard_violation() -> None:
+    """以 And/So/But/That's why 开头的候选单独看会悬空（真实素材里独立评审的头号失败原因）：程序先拦住，并指明换哪一句。"""
+    lines = [(0.0, 10.0, "Cats are strange ."), (12.0, 45.0, "And that is why cats sleep sixteen hours a day ."), (47.0, 90.0, "The real reason is energy saving because hunting is hard work .")]
+    sents = build_sentences(words_for(lines))
+    c = context_from(sents, [(s.start, s.end) for s in sents], 100.0)
+    plan = blank_plan()
+    with pytest.raises(ClipError) as e:
+        add_clip(plan, c, "s0002", "s0002", title="t", reason="r", length=(20, 60))
+    v = next(x for x in e.value.violations if x["code"] == "dangling_opening")
+    assert "s0003" in v["fix"] and plan.outputs == []
+    out, _ = add_clip(plan, c, "s0003", "s0003", title="t", reason="r", length=(20, 60))  # 换成自成一体的句子就过
+    assert out.id == "clip_1"

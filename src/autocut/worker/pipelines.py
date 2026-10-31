@@ -18,7 +18,10 @@ def register(app: App) -> None:
 
     from autocut.worker import pipe_montage
 
-    app.pipelines["montage"] = pipe_montage.pipeline_montage
-    app.pipelines["clips"] = pipe_clips.pipeline_clips
+    app.pipelines["montage_prepare"] = pipe_montage.pipeline_prepare
+    app.pipelines["montage_finish"] = pipe_montage.pipeline_finish
+    app.pipelines["clips_review"] = pipe_clips.pipeline_review
+    app.pipelines["clips_deliver"] = pipe_clips.pipeline_deliver
     app.pipelines["cut"] = pipe_cut.pipeline_cut
-    app.pipelines["commentary"] = pipe_commentary.pipeline_commentary
+    app.pipelines["commentary_prepare"] = pipe_commentary.pipeline_prepare
+    app.pipelines["commentary_finish"] = pipe_commentary.pipeline_finish

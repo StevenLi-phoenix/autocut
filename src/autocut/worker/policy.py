@@ -12,6 +12,8 @@ log = logging.getLogger(__name__)
 COMMANDS: dict[str, bool] = {
     "doctor": False,
     "transcribe": True,
+    "transcript": True,  # 第一次要识别（重活）；之后走缓存
+    "clip": False,  # agent 按句段 ID 建候选：吃缓存，秒级
     "analyze": True,
     "cut": True,
     "highlights": True,

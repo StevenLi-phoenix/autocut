@@ -16,7 +16,7 @@ import pytest
 from autocut.plan import Output, Segment
 from autocut.worker import commentary as C
 from autocut.worker.config import WorkerConfig
-from autocut.worker.llm import BudgetExceeded, Gateway, LLMError, extract_json
+from autocut.worker.llm import Gateway, LLMError, extract_json
 from autocut.worker.tts import TTS, TTSError, wav_duration
 
 pytestmark = pytest.mark.unit
@@ -156,8 +156,8 @@ def test_gateway_saves_raw_before_parse_and_tracks_spend(fake_gw: WorkerConfig, 
     assert obj == {"ok": True}
     raw = next((jd / "work" / "llm").glob("001-t.json"))
     assert "choices" in json.loads(raw.read_text())
-    assert gw.spent_usd() == pytest.approx(0.05) and gw.spent_cny() == pytest.approx(0.36)
-    assert json.loads((jd / "work" / "budget.json").read_text())["by_purpose"]["t"] == pytest.approx(0.05)
+    assert gw.spent_usd() > 0  # 只记估价日志，不拦截（上限由网关 key 兜底）
+    assert json.loads((jd / "work" / "budget.json").read_text())["by_purpose"]["t"] == pytest.approx(gw.spent_usd())
 
 
 def test_gateway_bad_json_retries_once_then_fails(fake_gw: WorkerConfig, tmp_path: Path) -> None:
@@ -169,17 +169,6 @@ def test_gateway_bad_json_retries_once_then_fails(fake_gw: WorkerConfig, tmp_pat
     with pytest.raises(LLMError) as e:
         gw.chat_json("m", [{"role": "user", "content": "x"}], purpose="t2")
     assert e.value.code == "llm_bad_json"
-
-
-def test_gateway_budget_hard_stop(fake_gw: WorkerConfig, tmp_path: Path) -> None:
-    gw = Gateway(fake_gw, tmp_path / "job", budget_cny=0.5)  # ≈ $0.069，两次调用 $0.10 就超
-    FakeGateway.replies = ["{}", "{}", "{}"]
-    gw.chat("m", [{"role": "user", "content": "1"}], purpose="a")
-    gw.chat("m", [{"role": "user", "content": "2"}], purpose="b")
-    n = len(FakeGateway.seen)
-    with pytest.raises(BudgetExceeded) as e:
-        gw.chat("m", [{"role": "user", "content": "3"}], purpose="c")
-    assert len(FakeGateway.seen) == n and e.value.fix  # 超限后一次请求都不再发
 
 
 def test_gateway_without_key_says_how_to_fix(tmp_path: Path) -> None:
@@ -241,27 +230,20 @@ def test_tts_failure_is_reported_not_silent(tmp_path: Path, monkeypatch: pytest.
     srv.shutdown()
 
 
-def test_spend_uses_max_of_gateway_delta_and_token_estimate(fake_gw: WorkerConfig, tmp_path: Path) -> None:
-    """网关 spend 结算有延迟（差值常为 0）：花费取 max(差值, 按 token 的估价)，预算不能被低估。"""
+def test_token_estimate_prices() -> None:
     from autocut.worker.llm import estimate_usd
 
     assert estimate_usd("claude-sonnet-5-5", {"prompt_tokens": 1_000_000, "completion_tokens": 100_000}) == pytest.approx(4.5)
     assert estimate_usd("unknown-model", {"total_tokens": 1_000_000}) == pytest.approx(3.0)
-    gw = Gateway(fake_gw, tmp_path / "job", 100.0)
-    FakeGateway.spend = 0.0
-    orig = FakeGateway.do_POST
 
-    def no_spend(self):  # 模拟结算延迟：差值为 0
-        orig(self)
-        FakeGateway.spend = 0.0
 
-    FakeGateway.do_POST = no_spend  # type: ignore[method-assign]
-    try:
-        FakeGateway.replies = ["{}"]
-        r = gw.chat("claude-sonnet-5-5", [{"role": "user", "content": "x"}], purpose="t")
-    finally:
-        FakeGateway.do_POST = orig  # type: ignore[method-assign]
-    assert r["usd"] > 0 and gw.spent_usd() == pytest.approx(r["usd"])
+def test_gateway_has_no_budget_gate(fake_gw: WorkerConfig, tmp_path: Path) -> None:
+    """DSH 是唯一的大脑，worker 不自建预算器：不会因为"花费"拒绝调用（上限由网关 key 的 limit_usd 兜底）。"""
+    gw = Gateway(fake_gw, tmp_path / "job")
+    FakeGateway.replies = ["{}"] * 5
+    for i in range(5):
+        gw.chat("claude-sonnet-5-5", [{"role": "user", "content": "x" * 1000}], purpose=f"p{i}")
+    assert len(FakeGateway.seen) == 5 and not hasattr(gw, "spent_cny")
 
 
 def test_claude_request_params(fake_gw: WorkerConfig, tmp_path: Path) -> None:

@@ -76,7 +76,7 @@ def wait_done(app: App, job: str, run: str, t: float = 15.0) -> dict[str, Any]:
 
 
 def test_command_whitelist(tmp_path: Path) -> None:
-    for ok in ("cut", "render", "show", "check"):
+    for ok in ("cut", "render", "show", "check", "transcript", "clip"):
         policy.check_command(ok, [], tmp_path)
     for bad in ("review", "ytpmv", "rm", "bash", ""):
         with pytest.raises(PolicyError) as e:
@@ -451,7 +451,7 @@ def test_reject_specific_outputs_keeps_others_and_records_zones(app: App) -> Non
     assert e.value.code == "no_such_output"
     delivery.reject(app.store, job, "boring", "没意思", ["c2"])
     ctx = delivery.rejection_context(app.store, job)
-    assert ctx["zones"] == [(100.0, 140.0)] and ctx["rounds"] == 1 and ctx["feedback"][0]["text"] == "没意思"
+    assert ctx["zones"] == [[100.0, 140.0]] and ctx["rounds"] == 1 and ctx["feedback"][0]["text"] == "没意思"
     assert [x["id"] for x in delivery.live(delivery.state(app.store, job))] == ["c1"]
     # 补做：新一轮只加新的，c1 带过去
     (d / "out" / "c.mp4").write_bytes(b"x")
@@ -501,6 +501,8 @@ def test_event_for_pipeline_results() -> None:
     bad = {"id": "r-2", "kind": "pipeline", "cmd": "clips", "status": "failed", "result": {"error": {"code": "none_passed", "message": "没有一条通过", "fix": "换素材"}}}
     f = events.event_for("job1", bad)
     assert f and f["kind"] == "autocut.failed" and "none_passed" in f["title"] and "换素材" in f["text"]
+    na = events.event_for("job1", {"id": "r-5", "kind": "pipeline", "cmd": "commentary_prepare", "status": "ok", "result": {"state": "needs_agent", "needs": "script", "brief": {"huge": "x" * 50000}}})
+    assert na and na["kind"] == "autocut.needs_agent" and "autocut-remote wait job1 r-5" in na["text"] and len(na["text"]) < 400 and "huge" not in na["text"]  # brief 不塞进事件，让 agent 自己取
     assert events.event_for("job1", {"id": "r-3", "kind": "autocut", "status": "ok"}) is None  # 单个子命令不发
     assert events.event_for("job1", {"id": "r-4", "kind": "pipeline", "status": "cancelled"}) is None
     for ev in (e, f):  # DSH 入口的字段限制：kind 以 source. 开头、key/subject ≤200、title ≤300、text ≤8000

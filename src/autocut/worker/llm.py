@@ -1,8 +1,9 @@
-"""LLM 网关客户端（registry 里的 llmgateway，OpenAI 兼容）。
+"""LLM 网关客户端（registry 里的 llmgateway，OpenAI 兼容）。**只给"眼睛"和"独立评审"用**：
 
+DSH 是唯一的大脑（写解说稿、提名选段、挑镜头都在 DSH agent 里）；worker 里只有两类无状态的单次调用：
+抽帧 → 一句话描述（眼睛），以及不同模型家族对候选文字稿的独立评审（必须独立于提名者）。
 - 原始响应先落盘（<job>/work/llm/NNN-<purpose>.json）再解析——付费 API 的规矩。
-- 每个任务一个现金上限（job.config.budget_cny，默认 ¥2）：调用前检查已花费，超了抛 BudgetExceeded，不再调用。
-- 花费 = 网关 /api/me 的 spend_usd 差值（精确，含缓存折扣）；查不到时按 usage 的 token 数保守估算。
+- 花费上限由网关 key 自己的 limit_usd 兜底（平台已有机制，不另建预算器）；这里只记每次的 token 和估价日志。
 - 视觉：messages 里放 image_url（data URI）。
 """
 
@@ -22,8 +23,8 @@ from autocut.worker.config import WorkerConfig, load_secrets
 from autocut.worker.store import atomic_write_json, read_json
 
 log = logging.getLogger(__name__)
-# 美元/百万 token（输入, 输出）：按 token 数的保守估价。网关 /api/me 的 spend 结算有延迟（实测大多数调用的差值是 0），
-# 所以每次花费取 max(网关差值, 估价)，预算宁可高估也不低估。
+# 美元/百万 token（输入, 输出）：按 token 数的保守估价（网关 /api/me 的 spend 结算有延迟，不能用来逐次计费）。
+# 只用于日志和摘要。
 PRICE_USD_PER_MTOK = {"claude-haiku-5-5": (1.0, 5.0), "claude-sonnet-5-5": (3.0, 15.0), "deepseek-flash": (0.3, 1.2), "deepseek-v4-pro": (0.6, 2.4)}
 DEFAULT_PRICE = (3.0, 15.0)
 THINKING_OFF = {"claude-sonnet-5-5", "claude-opus-5-5"}
@@ -44,24 +45,17 @@ class LLMError(Exception):
         self.code, self.message, self.fix = code, message, fix
 
 
-class BudgetExceeded(LLMError):
-    pass
-
-
 class Gateway:
-    def __init__(self, cfg: WorkerConfig, job_dir: Path, budget_cny: float) -> None:
-        self.cfg, self.job_dir, self.budget_cny = cfg, job_dir, budget_cny
+    def __init__(self, cfg: WorkerConfig, job_dir: Path, budget_cny: float | None = None) -> None:  # budget_cny 仅为兼容旧调用，不再使用
+        self.cfg, self.job_dir = cfg, job_dir
         self.key = load_secrets(cfg.secrets_file).get("AUTOCUT_LLM_KEY") or ""
         self.dir = job_dir / "work" / "llm"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.state_path = job_dir / "work" / "budget.json"
 
-    # ---- 预算
+    # ---- 估价日志（不拦截；上限由网关 key 兜底）
     def spent_usd(self) -> float:
         return float(read_json(self.state_path, {"spent_usd": 0.0}).get("spent_usd", 0.0))
-
-    def spent_cny(self) -> float:
-        return self.spent_usd() * self.cfg.cny_per_usd
 
     def _add_spend(self, usd: float, purpose: str, model: str) -> None:
         st = read_json(self.state_path, {"spent_usd": 0.0, "calls": 0, "by_purpose": {}})
@@ -69,17 +63,7 @@ class Gateway:
         st["calls"] = st.get("calls", 0) + 1
         bp = st.setdefault("by_purpose", {})
         bp[purpose] = round(bp.get(purpose, 0.0) + usd, 6)
-        st["budget_cny"] = self.budget_cny
         atomic_write_json(self.state_path, st)
-
-    def _gateway_spend(self) -> float | None:
-        try:
-            req = urllib.request.Request(f"{self.cfg.llm_base}/api/me", headers={"Authorization": f"Bearer {self.key}"})
-            with urllib.request.urlopen(req, timeout=15) as r:
-                return float(json.loads(r.read())["spend_usd"])
-        except Exception as e:  # noqa: BLE001
-            log.debug("读网关花费失败：%s", e)
-            return None
 
     # ---- 调用
     def chat(self, model: str, messages: list[dict[str, Any]], *, purpose: str, max_tokens: int = 4000, temperature: float = 0.7,
@@ -87,9 +71,6 @@ class Gateway:
         """返回 {"text", "usage", "usd", "raw_path"}。"""
         if not self.key:
             raise LLMError("no_llm_key", "worker 没有配置 LLM 网关 key", "在 secrets 文件里设置 AUTOCUT_LLM_KEY（见 docs/dev/worker.md）")
-        if self.spent_cny() >= self.budget_cny:
-            raise BudgetExceeded("budget_exceeded", f"本任务 LLM 花费已达上限 ¥{self.budget_cny:g}（已花 ¥{self.spent_cny():.3f}）",
-                                 "告诉用户预算用完；如需继续，开新 job 或用 --budget-cny 调高上限（要用户同意）")
         body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if not model.startswith("claude"):  # Claude 5 系列网关会拒绝 temperature（400 deprecated）
             body["temperature"] = temperature
@@ -99,7 +80,6 @@ class Gateway:
             body["response_format"] = {"type": "json_object"}
         seq = len(list(self.dir.glob("*.json"))) + 1
         raw_path = self.dir / f"{seq:03d}-{purpose}.json"
-        before = self._gateway_spend()
         last: Exception | None = None
         for attempt in range(retries + 1):
             t0 = time.perf_counter()
@@ -127,12 +107,9 @@ class Gateway:
             time.sleep(2 * (attempt + 1))
         else:
             raise last or LLMError("llm_call_failed", "未知失败")
-        after = self._gateway_spend()
         usd = estimate_usd(model, usage)
-        if before is not None and after is not None and after >= before:
-            usd = max(usd, after - before)
         self._add_spend(usd, purpose, model)
-        log.info("LLM %s model=%s tokens=%s usd=%.5f（累计 ¥%.3f / ¥%g）%.1fs", purpose, model, usage.get("total_tokens"), usd, self.spent_cny(), self.budget_cny, time.perf_counter() - t0)
+        log.info("LLM %s model=%s tokens=%s est_usd=%.5f（本 job 累计 $%.4f）%.1fs", purpose, model, usage.get("total_tokens"), usd, self.spent_usd(), time.perf_counter() - t0)
         if not text and data["choices"][0].get("finish_reason") == "length":
             raise LLMError("llm_truncated", "模型输出被截断（max_tokens 太小，推理模型会把额度花在思考上）", "调大 max_tokens 或换非推理模型")
         return {"text": text, "usage": usage, "usd": usd, "raw_path": str(raw_path), "finish": data["choices"][0].get("finish_reason")}

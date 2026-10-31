@@ -20,6 +20,9 @@ from autocut.recipes.highlights import _SENT_END, Cutter, _sentences, protected_
 
 log = logging.getLogger(__name__)
 ID_RE = re.compile(r"^s(\d{4,})$")
+# 以承接上文的连接词开头：单独看会"悬空"（独立评审里最常见的失败原因）。英文按词，中文按字。
+_DANGLING_EN = re.compile(r"^\s*(and|so|but|because|then|also|or|which is why|that's why|that is why|that's because|and that's|which|well|now)\b", re.I)
+_DANGLING_ZH = re.compile(r"^\s*(所以|但是|可是|然后|因为|而且|不过|于是|那么|也就是说|这就是为什么)")
 DEFAULT_LENGTH = (30.0, 60.0)
 MIN_GAP = 2.0  # 两条候选之间至少隔这么久（否则观众觉得是同一段）
 MAX_OVERLAP = 0.3
@@ -145,6 +148,10 @@ def check(ctx: ClipContext, i: int, j: int, start: float, end: float, how_s: str
     nxt = ctx.sents[j + 1] if j + 1 < len(ctx.sents) else None
     if last.text.rstrip()[-1:] not in _SENT_END and nxt is not None and nxt.start - last.end < 0.8:
         add("truncated_ending", "error", f"结尾「{last.text[-12:]}」像是半句话（后面 {nxt.start - last.end:.1f}s 内紧接着还有话）", f"把止句换成 {nxt.id} 或更靠后的句子")
+    first_text = ctx.sents[i].text
+    if _DANGLING_EN.match(first_text) or _DANGLING_ZH.match(first_text):
+        nxt_id = ctx.sents[i + 1].id if i + 1 < len(ctx.sents) else ctx.sents[i].id
+        add("dangling_opening", "error", f"开头「{first_text[:24]}…」是承接上文的连接词，单独看会悬空", f"起句换成 {nxt_id}（下一句）或更靠后、能自成一体的句子；开头最好是问题、观点或具体数字")
     for (a, b) in others or []:
         ov = max(0.0, min(end, b) - max(start, a))
         if ov / max(min(d, b - a), 1e-6) > MAX_OVERLAP:

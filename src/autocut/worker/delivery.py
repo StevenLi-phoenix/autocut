@@ -88,7 +88,7 @@ def reject(store: Store, job_id: str, reason: str, text: str, outputs: list[str]
 def rejection_context(store: Store, job_id: str) -> dict[str, Any]:
     """重新选段要带上的反馈：被拒过的区间（不得再选）+ 原因码与用户原话 + 已拒绝轮数。"""
     rej = read_json(store.job_dir(job_id) / "rejections.json", {"items": []})
-    return {"zones": [tuple(z) for it in rej["items"] for z in it.get("zones", [])],
+    return {"zones": [list(z) for it in rej["items"] for z in it.get("zones", [])],
             "feedback": [{"reason": it["reason"], "text": it.get("text", "")} for it in rej["items"]], "rounds": len(rej["items"])}
 
 

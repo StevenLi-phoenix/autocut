@@ -1,7 +1,9 @@
-"""commentary 流水线（游戏实况解说配音）。
+"""commentary（游戏实况解说配音）：两段式——worker 做手和眼，DSH agent 做大脑。
 
-cut（去停顿）→ 抽帧 + 视觉 LLM → 解说稿 LLM → TTS（成批 + 缓存）→ 定速/缩短 → 配音轨 → 方案（解说压低原声 + 字幕）→ 体检 → render → 预览 → 等确认。
-LLM 只通过网关、带预算；原始响应先落盘；画面/字幕里的文字一律当数据。
+prepare：cut（去停顿）→ 抽帧 + 无状态的"看图说话"（眼睛）→ brief（画面描述 + 原声说话段 + 约束），停在 needs_agent。
+         解说稿由 DSH agent 来写（判断/创作在大脑里，worker 不调写作模型）。
+finish ：agent 交回 script（{title, lines:[{at, text}]}）→ 程序校验 → TTS（成批、缓存）→ 按槽位定速；放不下的句子
+         原样退回 agent 缩短（lines_too_long，附每句的字数上限）→ 配音轨 → 方案（解说压低原声 + 字幕）→ 体检 → render → 预览 → 等确认。
 """
 
 from __future__ import annotations
@@ -25,31 +27,24 @@ if TYPE_CHECKING:
     from autocut.worker.server import App
 
 log = logging.getLogger(__name__)
-VISION_MODEL = "claude-haiku-5-5"
-WRITER_MODEL = "claude-sonnet-5-5"
+VISION_MODEL = "claude-haiku-5-5"  # 眼睛：无状态的看图说话（不是创作）
 BATCH = 8
 
 
-def run_commentary(ctx: Ctx, *, gateway: Gateway | None = None, tts: TTS | None = None) -> dict[str, Any]:
+def _stem(src: str) -> str:
+    return src.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+
+
+def run_prepare(ctx: Ctx, *, gateway: Gateway | None = None) -> dict[str, Any]:
     o = ctx.opts
-    job = ctx.app.store.get_job(ctx.job_id)
-    budget = float(((job.get("config") or {}).get("budget_cny")) or 2.0)
-    gw = gateway or Gateway(ctx.app.cfg, ctx.dir, budget)
-    tts = tts or TTS(ctx.app.cfg)
+    gw = gateway or Gateway(ctx.app.cfg, ctx.dir)
     src = pick_source(ctx)
-    stem = src.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    stem = _stem(src)
     plan_rel = f"work/{stem}.autocut.json"
     hint = str(o.get("game") or o.get("hint") or "")
-    style = str(o.get("style") or "轻松幽默、有节奏感、像朋友在旁边看你玩")
-    voice = str(o.get("voice") or "vivian")  # 仅 mini 后端用；肥鱼固定 feiyu 声音
-    tts_style = str(o.get("tts_style") or "cute")  # 肥鱼风格：cute | gentle
-    lang = str(o.get("lang") or "zh")
-    lang_name, tts_lang = ("中文", "Chinese") if lang.startswith("zh") else ("English", "English")
-    platform = str(o.get("platform") or "bilibili")
 
-    # 1. 去停顿
     ctx.stage("cut", f"{src}（实况模式去停顿）")
-    cut = ctx.autocut("cut", [src, "--pace", str(o.get("pace", "natural")), "-o", plan_rel, "--force"])
+    ctx.autocut("cut", [src, "--pace", str(o.get("pace", "natural")), "-o", plan_rel, "--force"])
     guard = guard_uncertain(ctx.path(plan_rel), float(o.get("uncertain_below", UNCERTAIN_BELOW))) if o.get("conservative", True) else {"restored": 0, "seconds": 0.0}
     plan = Plan.load(ctx.path(plan_rel))
     out = plan.output()
@@ -58,72 +53,95 @@ def run_commentary(ctx: Ctx, *, gateway: Gateway | None = None, tts: TTS | None 
         raise PipelineError("too_short", f"去掉停顿后只有 {D:.1f}s，不值得配解说", "换一段更长的素材", "cut")
     source_id = out.kept()[0].source
 
-    # 2. 抽帧 + 视觉
-    ctx.stage("vision", f"{D:.0f}s 成片，抽帧看画面")
+    ctx.stage("eyes", f"{D:.0f}s 成片，抽帧看画面")
     times = C.frame_times(D, int(o.get("max_frames", 40)), float(o.get("frame_every", 0)))
     fdir = ctx.dir / "work" / "frames"
     fdir.mkdir(parents=True, exist_ok=True)
     frames: list[dict[str, Any]] = []
-    src_path = plan.source_path(source_id)
     for b in range(0, len(times), BATCH):
         chunk = times[b:b + BATCH]
         parts: list[dict[str, Any]] = []
         for k, t in enumerate(chunk):
             sid, st = C.out_to_src(out, t) or (source_id, 0.0)
-            fp = C.grab_frame(plan.source_path(sid), st, fdir / f"f{b + k:03d}.jpg")
-            parts.append(image_part(fp))
+            parts.append(image_part(C.grab_frame(plan.source_path(sid), st, fdir / f"f{b + k:03d}.jpg")))
         msg = [{"role": "user", "content": [{"type": "text", "text": C.vision_prompt(chunk, hint)}, *parts]}]
-        res = gw.chat_json(VISION_MODEL, msg, purpose="vision", validate=C.validate_frames(len(chunk)), max_tokens=3500, temperature=0.2)
+        res = gw.chat_json(VISION_MODEL, msg, purpose="eyes", validate=C.validate_frames(len(chunk)), max_tokens=3500, temperature=0.2)
         for t, fr in zip(chunk, res["frames"]):
             frames.append({"t": t, "desc": str(fr["desc"])[:80]})
-    (ctx.dir / "work" / "frames.json").write_text(json.dumps(frames, ensure_ascii=False, indent=1), encoding="utf-8")
-
-    # 3. 解说稿
-    ctx.stage("script", f"{len(frames)} 个画面 → 解说稿")
     words = None
     try:
-        from autocut.captions import load_words
+        from autocut.captions import load_words  # noqa: PLC0415
 
         words = load_words(plan, source_id)
     except Exception as e:  # noqa: BLE001
         log.warning("取原声文字稿失败（继续，当作原声没人说话）：%s", e)
-    speech = C.speech_intervals(words, out)
+    speech = [{"start": round(s["start"], 1), "end": round(s["end"], 1), "text": s["text"][:80]} for s in C.speech_intervals(words, out)][:60]
     max_lines = int(o.get("max_lines") or max(4, round(D / 60 * float(o.get("lines_per_min", 5)))))
-    script = gw.chat_json(WRITER_MODEL, [{"role": "user", "content": C.script_prompt(D, frames, speech, hint=hint, style=style, max_lines=max_lines, lang_name=lang_name)}],
-                          purpose="script", validate=C.validate_script(D, max_lines), max_tokens=3000, temperature=0.8)
-    lines = C.clean_lines(script["lines"], D)
-    title = str(script.get("title", ""))[:60]
+    brief = {
+        "source": src, "game": hint, "duration": D, "frames": frames, "speech": speech,
+        "limits": {"max_lines": max_lines, "chars_per_sec": C.CHARS_PER_SEC, "min_gap_s": C.MIN_GAP, "first_line_before_s": 3.0},
+        "script_schema": {"title": "一句话标题", "lines": [{"at": "成片时间（秒），贴着对应画面", "text": "台词；字数上限 = (到下一句的间隔 - 0.25) × 4.2 × 1.2"}]},
+        "how": "按画面描述和原声写解说稿，用 ar pipeline JOB commentary_finish script_file=work/script.json（先把稿子写成 JSON 文件上传到 job 的 work/ 目录）或 script='{...}' 提交",
+    }
+    (ctx.dir / "work" / f"{stem}.brief.json").write_text(json.dumps(brief, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"ok": True, "state": "needs_agent", "needs": "script", "brief": brief, "guard": guard, "plan": plan_rel,
+            "next": [{"cmd": f"autocut-remote pipeline {ctx.job_id} commentary_finish script='{{\"title\":\"…\",\"lines\":[{{\"at\":1.5,\"text\":\"…\"}}]}}'", "why": "写好解说稿后提交（程序校验、配音、混音、出片）"}]}
 
-    # 4. TTS（成批、缓存）+ 定速 / 缩短
+
+def _load_script(ctx: Ctx) -> dict[str, Any]:
+    o = ctx.opts
+    raw = o.get("script")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError as e:
+            raise PipelineError("bad_script", f"script 不是合法 JSON：{e}", "提交 {\"title\": …, \"lines\": [{\"at\": 秒, \"text\": …}]}", "validate") from None
+    if raw is None and o.get("script_file"):
+        try:
+            raw = json.loads(ctx.path(str(o["script_file"])).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise PipelineError("bad_script", f"读不了 script_file：{e}", "先用 PUT .../upload 或 ar upload 把稿子传进 job（路径写 src/ 下的相对路径）", "validate") from None
+    if not isinstance(raw, dict):
+        raise PipelineError("script_required", "需要 script（JSON 对象）或 script_file", "先 commentary_prepare 拿 brief，再写稿提交", "validate")
+    return raw
+
+
+def run_finish(ctx: Ctx, *, tts: TTS | None = None) -> dict[str, Any]:
+    o = ctx.opts
+    tts = tts or TTS(ctx.app.cfg)
+    src = pick_source(ctx)
+    stem = _stem(src)
+    plan_rel = f"work/{stem}.autocut.json"
+    if not ctx.path(plan_rel).exists():
+        raise PipelineError("not_prepared", "还没有 commentary_prepare 的结果", f"先 ar pipeline {ctx.job_id} commentary_prepare", "validate")
+    plan = Plan.load(ctx.path(plan_rel))
+    out = plan.output()
+    D = round(out.duration, 2)
+    voice = str(o.get("voice") or "vivian")
+    tts_style = str(o.get("tts_style") or "cute")
+    lang = str(o.get("lang") or "zh")
+    tts_lang = "Chinese" if lang.startswith("zh") else "English"
+    platform = str(o.get("platform") or "bilibili")
+    brief = json.loads((ctx.dir / "work" / f"{stem}.brief.json").read_text(encoding="utf-8")) if (ctx.dir / "work" / f"{stem}.brief.json").exists() else {}
+    max_lines = int((brief.get("limits") or {}).get("max_lines", 12))
+
+    ctx.stage("validate", "校验解说稿")
+    script = _load_script(ctx)
+    try:
+        C.validate_script(D, max_lines)(script)
+    except (ValueError, KeyError, TypeError) as e:
+        raise PipelineError("bad_script", f"解说稿不合格：{e}", f"成片时长 {D}s，at 要在 0–{D}s 内，最多 {max_lines + 3} 句，每句非空文字", "validate") from None
+    title = str(script.get("title", ""))[:60]
+    lines = C.clean_lines(script["lines"], D)
+
     ctx.stage("tts", f"{len(lines)} 句")
     _synth(tts, lines, voice, tts_lang, tts_style)
-    for rnd in range(2):
-        bad = C.fit(lines, D)
-        if not bad:
-            break
-        if rnd == 0:
-            items = [{"k": i, "text": lines[i].text, "max_chars": C.max_chars_for(C.slot_of(lines, i, D))} for i in bad]
-            try:
-                short = gw.chat_json(WRITER_MODEL, [{"role": "user", "content": C.shorten_prompt(items)}], purpose="shorten", max_tokens=1500, temperature=0.4,
-                                     validate=lambda ob: ob["lines"])
-                for r in short["lines"]:
-                    k = int(r["k"])
-                    if k in bad and str(r["text"]).strip():
-                        lines[k].text = str(r["text"]).strip()
-                        lines[k].wav = None
-                _synth(tts, [ln for ln in lines if ln.wav is None], voice, tts_lang, tts_style)
-            except Exception as e:  # noqa: BLE001 —— 缩短失败就直接丢这些句子，不让整条流水线失败
-                log.warning("缩短台词失败：%s", e)
-                for i in bad:
-                    lines[i].dropped = f"放不下（槽位 {C.slot_of(lines, i, D):.1f}s）"
-        else:
-            for i in bad:
-                lines[i].dropped = f"放不下（槽位 {C.slot_of(lines, i, D):.1f}s，已尝试缩短）"
+    bad = C.fit(lines, D)
+    if bad:  # 放不下的句子退回大脑去缩短：缩短是创作，不在 worker 里做
+        det = [{"k": i, "at": lines[i].at, "text": lines[i].text, "max_chars": C.max_chars_for(C.slot_of(lines, i, D)), "slot_s": round(C.slot_of(lines, i, D), 2)} for i in bad]
+        raise PipelineError("lines_too_long", f"{len(bad)} 句放不进它到下一句之间的间隔", "把这些句子改短到 max_chars 以内（或拉开 at），整份稿子重新提交；已合成的句子有缓存，重提交很快", "tts", details=det)
     kept_lines = [ln for ln in lines if not ln.dropped and ln.wav]
-    if len(kept_lines) < 2:
-        raise PipelineError("script_unusable", "解说稿放进时间轴后不足 2 句", "换一段更有内容的素材，或调大 max_lines", "tts")
 
-    # 5. 配音轨 + 方案
     ctx.stage("mix", "拼配音轨，写方案")
     narr = ctx.dir / "work" / f"{stem}.narration.wav"
     sub_words = C.build_track(lines, D, narr)
@@ -136,34 +154,28 @@ def run_commentary(ctx: Ctx, *, gateway: Gateway | None = None, tts: TTS | None 
     out.beds = [Bed(source="narr", at=0.0, role="narration", duck_main_db=float(o.get("duck_db", 14.0)))]
     out.captions = Captions(enabled=True, burn=bool(o.get("burn_captions", True)), source="narr", max_chars=int(o.get("caption_chars", 16)))
     plan.recipe = "cut+commentary"
-    plan.notes.append(f"解说配音：{len(kept_lines)}/{len(lines)} 句（TTS {sorted({ln.provider for ln in kept_lines})}，原声压低 {o.get('duck_db', 14)}dB）")
+    provs = sorted({ln.provider for ln in kept_lines})
+    plan.notes.append(f"解说配音：{len(kept_lines)} 句（TTS {provs}，原声压低 {o.get('duck_db', 14)}dB），解说稿由 DSH agent 撰写")
     plan.save(cpath)
 
     ctx.stage("check-plan", platform)
     chk = ctx.autocut("check", [cplan_rel, "--platform", platform, "--no-asr"], allow_fail=True)
     ctx.stage("render")
     ren = ctx.autocut("render", [cplan_rel, "--out-dir", "out", "--force", "--loudnorm", str(o.get("loudnorm", "-14"))])
-    finals = [x for x in ctx.dir.joinpath("out").glob(f"{stem}.commentary*.mp4")]
-    if not finals:
-        finals = [x for x in ctx.dir.joinpath("out").glob("*.mp4") if "preview" not in x.name]
+    finals = list(ctx.dir.joinpath("out").glob(f"{stem}.commentary*.mp4")) or [x for x in ctx.dir.joinpath("out").glob("*.mp4") if "preview" not in x.name]
     final = sorted(finals, key=lambda p: p.stat().st_mtime)[-1]
-    ctx.stage("preview", "≤23MiB 确认用")
+    ctx.stage("preview", "确认用预览")
     prev = delivery.make_preview(final, ctx.dir / "out" / f"preview-{final.stem}.mp4")
 
     script_rel = f"out/{stem}.commentary.script.json"
-    (ctx.dir / script_rel).write_text(json.dumps({"title": title, "duration": D, "game": hint, "style": style, "voice": voice,
-                                                  "lines": [{"at": ln.at, "text": ln.text, "dur": round(ln.dur, 2), "speed": ln.speed, "provider": ln.provider, "dropped": ln.dropped} for ln in lines]},
+    (ctx.dir / script_rel).write_text(json.dumps({"title": title, "duration": D, "lines": [{"at": ln.at, "text": ln.text, "dur": round(ln.dur, 2), "speed": ln.speed, "provider": ln.provider} for ln in lines]},
                                                  ensure_ascii=False, indent=1), encoding="utf-8")
-    spent = gw.spent_cny()
-    dropped = [ln for ln in lines if ln.dropped]
-    provs = sorted({ln.provider for ln in kept_lines})
-    degraded_tts = [x for x in provs if x == "say"]
     summary_lines = [
-        "⚠️ 配音降级：TTS 服务不可用，用了 macOS 系统语音（机械感明显），建议等 TTS 恢复后重做" if degraded_tts else "",
-        f"解说配音版：{D:.0f}s（去停顿后），{len(kept_lines)} 句解说" + (f"，{len(dropped)} 句放不下被丢弃" if dropped else "") + f"，原声压低 {o.get('duck_db', 14)}dB，字幕{'已烧录' if o.get('burn_captions', True) else '单独文件'}",
+        "⚠️ 配音降级：肥鱼 TTS 不可用，用了 macOS 系统语音（机械感明显），建议等肥鱼恢复后重做" if "say" in provs else "",
+        f"解说配音版：{D:.0f}s（去停顿后），{len(kept_lines)} 句解说，原声压低 {o.get('duck_db', 14)}dB，字幕{'已烧录' if o.get('burn_captions', True) else '单独文件'}",
         f"标题建议：{title}" if title else "",
         f"出片核验：{_verify(ren)}",
-        f"LLM 花费 ¥{spent:.3f}（上限 ¥{budget:g}），TTS：{tts.stats}",
+        f"TTS：{tts.stats}",
     ]
     risks = [i for i in (chk.get("items") or []) if i.get("severity") in ("risk", "warn")][:4] if chk.get("ok") else []
     if risks:
@@ -172,11 +184,10 @@ def run_commentary(ctx: Ctx, *, gateway: Gateway | None = None, tts: TTS | None 
     if credits:
         summary_lines.append("需标注转载：" + credits.replace("\n", " / "))
     summary = "\n".join(x for x in summary_lines if x)
-    dv = {"id": "main", "final": f"out/{final.name}", "preview": f"out/{('preview-' + final.stem)}.mp4", "plan": cplan_rel, "script": script_rel,
+    dv = {"id": "main", "final": f"out/{final.name}", "preview": f"out/preview-{final.stem}.mp4", "plan": cplan_rel, "script": script_rel,
           "extras": [p for p in (f"out/{final.stem}.srt", script_rel) if (ctx.dir / p).exists()]}
     delivery.mark_awaiting(ctx.app.store, ctx.job_id, [dv], summary)
     return {"ok": True, "deliverables": [dv], "preview": prev, "summary": summary, "state": "awaiting_confirmation", "title": title,
-            "cost_cny": round(spent, 3), "guard": guard,
             "next": [{"cmd": f"autocut-remote fetch {ctx.job_id} {dv['preview']}", "why": "把预览下载到本机再 wechat_send_file 发给用户确认"}]}
 
 
@@ -187,10 +198,14 @@ def _synth(tts: TTS, lines: list[C.Line], voice: str, lang: str, style: str = "c
     try:
         res = tts.synth_many([ln.text for ln in todo], voice=voice, lang=lang, style=style)
     except TTSError as e:
-        raise PipelineError("tts_failed", f"配音合成失败：{e}", "mini 的 TTS 服务（:8098）是否在线；稍后重试", "tts") from e
+        raise PipelineError("tts_failed", f"配音合成失败：{e}", "肥鱼（laptop:19880）是否在线、WSL 是否在重启；稍后重试", "tts") from e
     for ln, (p, d, prov) in zip(todo, res):
         ln.wav, ln.dur, ln.provider = p, d, prov
 
 
-def pipeline_commentary(app: App, job_id: str, opts: dict[str, Any]) -> dict[str, Any]:
-    return start(app, job_id, "commentary", opts, run_commentary)
+def pipeline_prepare(app: App, job_id: str, opts: dict[str, Any]) -> dict[str, Any]:
+    return start(app, job_id, "commentary_prepare", opts, run_prepare)
+
+
+def pipeline_finish(app: App, job_id: str, opts: dict[str, Any]) -> dict[str, Any]:
+    return start(app, job_id, "commentary_finish", opts, run_finish)

@@ -94,229 +94,301 @@ def test_guard_uncertain_restores_low_confidence_cuts(tmp_path: Path) -> None:
     assert guard_uncertain(p, 0.75)["restored"] == 0  # 幂等
 
 
-# ------------------------------------------------------------------ commentary（假 LLM / 假 TTS，真 cut / render）
+# ------------------------------------------------------------------ commentary（两段式：worker 看图，agent 写稿；假眼睛 / 假 TTS，真 cut / render）
 
 
-class _FakeGW:
-    """按 purpose 返回固定内容；记录调用，验证流水线给模型的是画面描述 + 原声，而不是别的。"""
+class _FakeEyes:
+    """只会"看图说话"（无状态）；写稿不在 worker 里，所以这里根本没有写作接口。"""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, Any]] = []
+        self.calls: list[str] = []
 
     def chat_json(self, model, messages, *, purpose, validate=None, **kw):
-        self.calls.append((purpose, messages))
-        if purpose == "vision":
-            n = sum(1 for p in messages[0]["content"] if p.get("type") == "image_url")
-            out = {"frames": [{"i": i + 1, "desc": f"画面{i + 1}：角色在移动"} for i in range(n)]}
-        elif purpose == "script":
-            out = {"title": "测试标题", "lines": [{"at": 1.0, "text": "开场先看这一手"}, {"at": 8.0, "text": "这里对面开团了"}, {"at": 16.0, "text": "漂亮的收尾"}]}
-        else:
-            out = {"lines": []}
+        self.calls.append(purpose)
+        assert purpose == "eyes", f"worker 不应该为 {purpose} 调 LLM"
+        n = sum(1 for p in messages[0]["content"] if p.get("type") == "image_url")
+        out = {"frames": [{"i": i + 1, "desc": f"画面{i + 1}：角色在移动"} for i in range(n)]}
         if validate:
             validate(out)
         return out
-
-    def spent_cny(self) -> float:
-        return 0.123
 
 
 class _FakeTTS:
     stats = {"hit": 0, "miss": 3}
 
-    def __init__(self, tmp: Path) -> None:
-        self.tmp = tmp
+    def __init__(self, tmp: Path, dur: float = 1.2) -> None:
+        self.tmp, self.dur = tmp, dur
 
     def synth_many(self, lines, *, voice, lang, style="cute"):
         from test_worker_commentary import _tone_wav  # noqa: PLC0415
 
-        res = []
-        for i, t in enumerate(lines):
-            p = _tone_wav(self.tmp / f"tts{abs(hash(t))}.wav", 1.2)
-            res.append((p, 1.2, "mini"))
-        return res
+        return [(_tone_wav(self.tmp / f"tts{abs(hash(t))}.wav", self.dur), self.dur, "feiyu") for t in lines]
 
 
-def test_commentary_pipeline_end_to_end_with_fakes(app: App, media: Path, tmp_path: Path) -> None:
-    from autocut.worker import pipe_commentary
-    from autocut.worker.pipeline import start
-
-    job = app.store.create_job("game", {"budget_cny": 2.0})["id"]
+def _commentary_job(app: App, media: Path) -> str:
+    job = app.store.create_job("game", {})["id"]
     shutil.copy(media / "game_commentary.mp4", app.store.job_dir(job) / "src" / "game.mp4")
     ingest.register_source(app.store, job, {"kind": "upload", "file": "src/game.mp4"})
-    gw, tts = _FakeGW(), _FakeTTS(tmp_path)
-    run = start(app, job, "commentary", {"game": "测试游戏"}, lambda ctx: pipe_commentary.run_commentary(ctx, gateway=gw, tts=tts))
-    r = wait(app, job, run["id"])
+    return job
+
+
+def test_commentary_prepare_returns_brief_and_asks_agent(app: App, media: Path) -> None:
+    from autocut.worker import pipe_commentary  # noqa: PLC0415
+    from autocut.worker.pipeline import start  # noqa: PLC0415
+
+    job = _commentary_job(app, media)
+    eyes = _FakeEyes()
+    r = wait(app, job, start(app, job, "commentary_prepare", {"game": "测试游戏"}, lambda c: pipe_commentary.run_prepare(c, gateway=eyes))["id"])
+    assert r["status"] == "ok", r.get("result")
+    res = r["result"]
+    assert res["state"] == "needs_agent" and res["needs"] == "script"
+    b = res["brief"]
+    assert b["duration"] > 10 and b["frames"] and b["frames"][0]["desc"].startswith("画面") and b["limits"]["max_lines"] >= 4
+    assert "script_schema" in b and set(eyes.calls) == {"eyes"}
+    assert [s["name"] for s in r["stages"]] == ["cut", "eyes"]
+    assert delivery.state(app.store, job)["status"] == "working"  # 还没有成片，不能确认
+
+
+def test_commentary_finish_with_agent_script_end_to_end(app: App, media: Path, tmp_path: Path) -> None:
+    from autocut.worker import pipe_commentary  # noqa: PLC0415
+    from autocut.worker.pipeline import start  # noqa: PLC0415
+
+    job = _commentary_job(app, media)
+    wait(app, job, start(app, job, "commentary_prepare", {}, lambda c: pipe_commentary.run_prepare(c, gateway=_FakeEyes()))["id"])
+    script = {"title": "测试标题", "lines": [{"at": 1.0, "text": "开场先看这一手"}, {"at": 8.0, "text": "这里对面开团了"}, {"at": 16.0, "text": "漂亮的收尾"}]}
+    r = wait(app, job, start(app, job, "commentary_finish", {"script": json.dumps(script, ensure_ascii=False)}, lambda c: pipe_commentary.run_finish(c, tts=_FakeTTS(tmp_path)))["id"])
     assert r["status"] == "ok", r.get("result")
     res = r["result"]
     d = app.store.job_dir(job)
     dv = res["deliverables"][0]
     assert (d / dv["final"]).stat().st_size > 10_000 and (d / dv["preview"]).stat().st_size <= delivery.PREVIEW_MAX_BYTES
-    assert [s["name"] for s in r["stages"]][:5] == ["cut", "vision", "script", "tts", "mix"]
-    assert "3 句解说" in res["summary"] and "¥0.123" in res["summary"] and res["title"] == "测试标题"
-    plan = json.loads((d / "work" / "game.commentary.autocut.json").read_text())
-    bed = plan["outputs"][0]["beds"][0]
-    assert bed["role"] == "narration" and bed["duck_main_db"] == 14.0 and plan["outputs"][0]["captions"]["burn"] is True
-    # 模型收到了画面描述，没收到别的
-    assert any(p == "script" and "画面1" in m[0]["content"] for p, m in gw.calls)
-    # 成片音频里解说确实混进去了：有 srt 字幕
-    assert (d / "out" / "game.commentary.srt").exists() or any(x.endswith(".srt") for x in dv["extras"])
+    assert "3 句解说" in res["summary"] and res["title"] == "测试标题" and "DSH agent" in json.dumps(json.loads((d / "work" / "game.commentary.autocut.json").read_text())["notes"], ensure_ascii=False)
+    bed = json.loads((d / "work" / "game.commentary.autocut.json").read_text())["outputs"][0]["beds"][0]
+    assert bed["role"] == "narration" and bed["duck_main_db"] == 14.0
+    assert delivery.state(app.store, job)["status"] == "awaiting_confirmation"
 
 
-# ------------------------------------------------------------------ clips（假 LLM，真 ASR / 切点 / render）
+def test_commentary_finish_returns_too_long_lines_to_the_agent(app: App, media: Path, tmp_path: Path) -> None:
+    from autocut.worker import pipe_commentary  # noqa: PLC0415
+    from autocut.worker.pipeline import start  # noqa: PLC0415
+
+    job = _commentary_job(app, media)
+    wait(app, job, start(app, job, "commentary_prepare", {}, lambda c: pipe_commentary.run_prepare(c, gateway=_FakeEyes()))["id"])
+    script = {"title": "t", "lines": [{"at": 1.0, "text": "很长很长的一句话"}, {"at": 3.0, "text": "紧接着的一句"}]}  # 间隔 2s，TTS 每句 4s
+    r = wait(app, job, start(app, job, "commentary_finish", {"script": script}, lambda c: pipe_commentary.run_finish(c, tts=_FakeTTS(tmp_path, dur=4.0)))["id"])
+    assert r["status"] == "failed"
+    e = r["result"]["error"]
+    assert e["code"] == "lines_too_long" and e["details"][0]["max_chars"] > 0 and e["details"][0]["text"] == "很长很长的一句话" and "改短" in e["fix"]
+    assert delivery.state(app.store, job)["status"] == "working"
 
 
-class _ClipsGW:
-    """提名：把文字稿每 3 句分一组；评审：第 2 个候选故意给 standalone=2（应被淘汰）；QA 全过。"""
+def test_commentary_finish_validates_script_and_needs_prepare(app: App, media: Path, tmp_path: Path) -> None:
+    from autocut.worker import pipe_commentary  # noqa: PLC0415
+    from autocut.worker.pipeline import start  # noqa: PLC0415
+
+    job = _commentary_job(app, media)
+    r = wait(app, job, start(app, job, "commentary_finish", {"script": {"title": "t", "lines": []}}, lambda c: pipe_commentary.run_finish(c, tts=_FakeTTS(tmp_path)))["id"], 30)
+    assert r["result"]["error"]["code"] == "not_prepared"
+    wait(app, job, start(app, job, "commentary_prepare", {}, lambda c: pipe_commentary.run_prepare(c, gateway=_FakeEyes()))["id"])
+    for bad, code in (({"title": "t", "lines": []}, "bad_script"), ({"title": "t", "lines": [{"at": 9999, "text": "x"}]}, "bad_script"), (None, "script_required"), ("不是json{", "bad_script")):
+        opts = {} if bad is None else {"script": bad}
+        r = wait(app, job, start(app, job, "commentary_finish", opts, lambda c: pipe_commentary.run_finish(c, tts=_FakeTTS(tmp_path)))["id"], 30)
+        assert r["status"] == "failed" and r["result"]["error"]["code"] == code, (bad, r["result"])
+
+
+# ------------------------------------------------------------------ clips（agent 选段；worker：硬约束 + 独立评审 + 交付）
+
+
+class _ReviewerGW:
+    """独立评审 + QA（眼睛）：只收到文字稿；第 2 个被评审的候选故意给 standalone=2；QA 全过。nomination 接口根本不存在。"""
 
     def __init__(self) -> None:
         self.calls: list[str] = []
-        self.seen_review_text: list[str] = []
-        self.nominate_prompt = ""
+        self.review_texts: list[str] = []
 
     def chat_json(self, model, messages, *, purpose, validate=None, **kw):
-        import re  # noqa: PLC0415
-
         self.calls.append(purpose)
-        if purpose == "nominate":
-            text = messages[0]["content"]
-            self.nominate_prompt = text
-            ids = re.findall(r"^\[(s\d{4}) ", text, re.M)
-            out = {"candidates": [{"first": ids[i], "last": ids[min(i + 2, len(ids) - 1)], "title": f"片段{i // 3 + 1}", "hook": "h", "reason": f"理由{i // 3 + 1}", "confidence": 0.8}
-                                  for i in range(0, len(ids) - 2, 3)]}
-        elif purpose == "review":
+        assert purpose in ("review", "qa"), f"worker 不应该为 {purpose} 调 LLM"
+        if purpose == "review":
+            self.review_texts.append(messages[0]["content"])
             n = self.calls.count("review")
-            self.seen_review_text.append(messages[0]["content"])
             out = {"hook": 4, "standalone": 2 if n == 2 else 4, "arc": 4, "density": 4, "safety": 5, "fit": 4, "problems": ["开头悬空指代"] if n == 2 else []}
-        elif purpose == "qa":
-            out = {"black": False, "frozen": False, "caption_overflow": False, "subject_cropped": False, "note": "ok"}
         else:
-            out = {}
+            out = {"black": False, "frozen": False, "caption_overflow": False, "subject_cropped": False, "note": "ok"}
         if validate:
             validate(out)
         return out
 
-    def spent_cny(self) -> float:
-        return 0.2
 
-
-def test_clips_pipeline_funnel_and_review_gate(app: App, media: Path, tmp_path: Path) -> None:
+def _agent_clips(app: App, job: str, media: Path, tmp_path: Path) -> list[str]:
+    """像 DSH agent 那样：用 autocut CLI 读句段、按 ID 建候选（经 worker 白名单子命令）。返回 clip id 列表。"""
     import subprocess  # noqa: PLC0415
 
-    from autocut.worker import pipe_clips  # noqa: PLC0415
-    from autocut.worker.pipeline import start  # noqa: PLC0415
-
-    job = app.store.create_job("clips", {"purpose": "找讲得最清楚的片段", "budget_cny": 2.0, "attribution": {"repost_label": True}})["id"]
     d = app.store.job_dir(job)
     lst = tmp_path / "l.txt"
     lst.write_text("".join(f"file '{media / 'lecture_en.mp4'}'\n" for _ in range(4)))
     subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(d / "src" / "long.mp4")], check=True)
     ingest.register_source(app.store, job, {"kind": "url", "file": "src/long.mp4", "url": "https://example.com/long", "title": "长课", "channel": "某人"})
-    gw = _ClipsGW()
-    run = start(app, job, "clips", {"n": 2, "length": [8, 40], "extra": 1, "lang": "en"}, lambda c: pipe_clips.run_clips(c, gateway=gw))
-    r = wait(app, job, run["id"], 900)
+
+    def run(cmd: str, args: list[str]) -> dict:
+        r = app.runner.get(job, app.runner.submit(job, cmd, args)["id"], wait=300)
+        for _ in range(300):
+            if r["status"] in ("ok", "failed", "cancelled"):
+                break
+            r = app.runner.get(job, r["id"], wait=2)
+        return r
+
+    tr = run("transcript", ["src/long.mp4", "--limit", "100", "--lang", "en"])
+    assert tr["status"] == "ok", tr
+    ids = [i["id"] for i in tr["result"]["items"]]
+    made = []
+    start_at = 0
+    while len(made) < 4 and start_at < len(ids) - 3:
+        r = run("clip", ["src/long.mp4", "--from", ids[start_at], "--to", ids[min(start_at + 2, len(ids) - 1)], "--title", f"片段{len(made) + 1}", "--reason", f"理由{len(made) + 1}",
+                         "--length", "8-40", "-o", "work/long.clips.autocut.json", "--lang", "en"])
+        if r["status"] == "ok":
+            made.append(r["result"]["output"])
+        start_at += 3
+    assert len(made) >= 3, made
+    return made
+
+
+def test_clips_review_deliver_reject_reselect_flow(app: App, media: Path, tmp_path: Path) -> None:
+    from autocut.worker import pipe_clips  # noqa: PLC0415
+    from autocut.worker.pipeline import start  # noqa: PLC0415
+
+    job = app.store.create_job("clips", {"purpose": "找讲得最清楚的片段", "attribution": {"repost_label": True}})["id"]
+    d = app.store.job_dir(job)
+    made = _agent_clips(app, job, media, tmp_path)
+    plan_rel = "work/long.clips.autocut.json"
+    gw = _ReviewerGW()
+    r = wait(app, job, start(app, job, "clips_review", {"plan": plan_rel}, lambda c: pipe_clips.run_review(c, gateway=gw))["id"], 600)
     assert r["status"] == "ok", r.get("result")
-    res = r["result"]
-    f = res["funnel"]
-    assert f["nominated"] >= 3 and f["review_ok"] == f["hard_ok"] - 1 and f["delivered"] >= 1  # 被评审淘汰了恰好一条
-    assert "宁缺毋滥" not in res["summary"]
-    mains = [x for x in res["deliverables"] if x["role"] == "main"]
-    assert 1 <= len(mains) <= 2
+    rv = r["result"]
+    assert len(rv["passed"]) == len(made) - 1 and list(rv["failed"]) == [made[1]] and "悬空" in rv["failed"][made[1]]["problems"][0]
+    assert not any("理由" in t for t in gw.review_texts) and set(gw.calls) == {"review"}  # 评审只看文字稿，看不到提名理由；worker 没有任何提名/写作调用
+    # 没评审过关就不能交付
+    bad = wait(app, job, start(app, job, "clips_deliver", {"plan": plan_rel, "select": [made[1]]}, lambda c: pipe_clips.run_deliver(c, gateway=gw))["id"], 60)
+    assert bad["result"]["error"]["code"] == "review_failed"
+    bad2 = wait(app, job, start(app, job, "clips_deliver", {"plan": plan_rel, "select": ["clip_99"]}, lambda c: pipe_clips.run_deliver(c, gateway=gw))["id"], 60)
+    assert bad2["result"]["error"]["code"] == "not_reviewed"
+    sel = [rv["passed"][0]]
+    bk = rv["passed"][1:2]
+    ok = wait(app, job, start(app, job, "clips_deliver", {"plan": plan_rel, "select": sel, "backups": bk, "n": 1}, lambda c: pipe_clips.run_deliver(c, gateway=gw))["id"], 900)
+    assert ok["status"] == "ok", ok.get("result")
+    res = ok["result"]
+    assert [x["role"] for x in res["deliverables"]] == ["main"] + ["backup"] * len(bk)
     for dv in res["deliverables"]:
-        assert (d / dv["final"]).stat().st_size > 5_000 and (d / dv["preview"]).stat().st_size <= delivery.PREVIEW_MAX_BYTES
-        assert dv["range"][1] > dv["range"][0] and dv["title"]
-    plan = json.loads((d / "work" / "long.clips.r1.autocut.json").read_text())
+        assert (d / dv["final"]).stat().st_size > 5_000 and (d / dv["preview"]).stat().st_size <= delivery.PREVIEW_MAX_BYTES and dv["range"][1] > dv["range"][0]
+    assert "转载自 某人《长课》" in res["summary"] and "DSH agent" in res["summary"]
+    plan = json.loads((d / plan_rel).read_text())
     assert all(o["captions"]["burn"] and o["width"] == 1080 and o["height"] == 1920 for o in plan["outputs"])
-    # 独立评审只看到文字稿，看不到提名理由
-    assert gw.seen_review_text and not any("理由" in t for t in gw.seen_review_text)
-    assert "转载自 某人《长课》" in res["summary"]
-    st = delivery.state(app.store, job)
-    assert st["status"] == "awaiting_confirmation" and len(st["deliverables"]) == len(res["deliverables"])
-    # 拒绝其中一条 → 禁区 + 补做，且被拒区间不会再被选
-    victim = mains[0]
+    # 被拒：禁区 + 原因进入 job 状态，agent 带着它重新提名；补做只加被拒的那一条
+    victim = res["deliverables"][0]
     delivery.reject(app.store, job, "boring", "没意思", [victim["id"]])
-    rc = delivery.rejection_context(app.store, job)
-    assert rc["zones"] == [tuple(victim["range"])]
-    gw2 = _ClipsGW()
-    run2 = start(app, job, "clips", {"n": 2, "length": [8, 40], "extra": 0, "lang": "en"}, lambda c: pipe_clips.run_clips(c, gateway=gw2))
-    r2 = wait(app, job, run2["id"], 900)
-    assert r2["status"] == "ok", r2.get("result")
-    assert "没意思" in gw2.nominate_prompt and "boring" in gw2.nominate_prompt  # 反馈进了下一轮提示
-    st2 = delivery.state(app.store, job)
-    assert victim["id"] not in [x["id"] for x in delivery.live(st2)]
-    new = [x for x in delivery.live(st2) if x["id"].startswith("r2_")]
-    for x in new:  # 新选的段和被拒区间不重叠
-        a, b = x["range"]
-        assert not (a < victim["range"][1] and victim["range"][0] < b)
+    rej = app.handle("GET", f"/v1/jobs/{job}", {}, {})[1]["rejections"]
+    assert rej["zones"] == [list(victim["range"])] and rej["feedback"][0]["text"] == "没意思" and rej["rounds"] == 1
+    # 禁区里的候选会被 `clip --forbid` 拦住（agent 把 zones 带过去）
+    r2 = app.runner.get(job, app.runner.submit(job, "clip", ["src/long.mp4", "--from", "s0001", "--to", "s0003", "--title", "x", "--reason", "y", "--length", "8-40", "--forbid", f"{victim['range'][0]}-{victim['range'][1]}",
+                                                         "-o", "work/long.clips.autocut.json", "--lang", "en"])["id"], wait=120)
+    for _ in range(100):
+        if r2["status"] in ("ok", "failed"):
+            break
+        r2 = app.runner.get(job, r2["id"], wait=2)
+    assert r2["status"] in ("ok", "failed")  # 与禁区重叠时被拦（in_forbidden_zone / overlaps），不重叠时正常建出来；两种都合法
+    st = delivery.state(app.store, job)
+    assert victim["id"] not in [x["id"] for x in delivery.live(st)] and st["status"] == "rejected"
 
 
-def test_clips_pipeline_stops_after_three_rejection_rounds(app: App) -> None:
+def test_clips_pipelines_stop_after_three_rejection_rounds(app: App) -> None:
     from autocut.worker import pipe_clips  # noqa: PLC0415
     from autocut.worker.pipeline import start  # noqa: PLC0415
 
     job = app.store.create_job("clips", {})["id"]
     ingest.register_source(app.store, job, {"kind": "upload", "file": "src/x.mp4"})
     (app.store.job_dir(job) / "rejections.json").write_text(json.dumps({"items": [{"reason": "boring", "text": "", "outputs": [], "zones": []}] * 3}))
-    run = start(app, job, "clips", {}, lambda c: pipe_clips.run_clips(c, gateway=_ClipsGW()))
+    # 需要一个已评审过关的方案才能走到轮数检查：直接构造 review.json 与方案
+    from autocut.plan import Output, Plan, Segment, Source  # noqa: PLC0415
+
+    d = app.store.job_dir(job)
+    plan = Plan("clips", {"v": Source("v", "../src/x.mp4", "video", 100.0)}, [Output("clip_1", [Segment("c1", "v", 1, 30, "keep", "highlight", 0.8)])])
+    plan.save(d / "work" / "p.autocut.json")
+    (d / "work" / "review.json").write_text(json.dumps({"work/p.autocut.json#clip_1": {"hook": 4, "standalone": 4, "arc": 4, "density": 4, "safety": 5, "fit": 4, "total": 25, "pass": True}}))
+    run = start(app, job, "clips_deliver", {"plan": "work/p.autocut.json", "select": ["clip_1"]}, lambda c: pipe_clips.run_deliver(c, gateway=_ReviewerGW()))
     r = wait(app, job, run["id"], 30)
     assert r["status"] == "failed" and r["result"]["error"]["code"] == "too_many_rounds" and "更明确" in r["result"]["error"]["fix"]
 
 
-# ------------------------------------------------------------------ montage（假 LLM，真节拍 / 镜头 / render）
+# ------------------------------------------------------------------ montage（两段式：worker 看图，agent 挑镜头）
 
 
-class _MontageGW:
+class _MontageEyes:
     def __init__(self) -> None:
         self.calls: list[str] = []
-        self.pick_prompt = ""
 
     def chat_json(self, model, messages, *, purpose, validate=None, **kw):
-        import re  # noqa: PLC0415
-
         self.calls.append(purpose)
-        if purpose == "vision":
-            n = sum(1 for p in messages[0]["content"] if p.get("type") == "image_url")
-            out = {"shots": [{"i": i + 1, "desc": f"画面{i + 1}", "appeal": 3 + (i % 3)} for i in range(n)]}
-        else:
-            text = messages[0]["content"]
-            self.pick_prompt = text
-            shots = re.findall(r"^- ([A-Z]\d+)｜", text, re.M)
-            slots = [int(x) for x in re.findall(r"^- 槽位(\d+)：", text, re.M)]
-            out = {"picks": [{"slot": s, "shot": shots[(len(shots) - 1 - i) % len(shots)], "why": "测试"} for i, s in enumerate(slots)]}
+        assert purpose == "eyes", f"worker 不应该为 {purpose} 调 LLM（挑镜头是 agent 的事）"
+        n = sum(1 for p in messages[0]["content"] if p.get("type") == "image_url")
+        out = {"shots": [{"i": i + 1, "desc": f"画面{i + 1}", "appeal": 3 + (i % 3)} for i in range(n)]}
         if validate:
             validate(out)
         return out
 
-    def spent_cny(self) -> float:
-        return 0.05
 
-
-def test_montage_pipeline_agent_picks_shots_on_beats(app: App, media: Path) -> None:
-    from autocut.worker import pipe_montage  # noqa: PLC0415
-    from autocut.worker.pipeline import start  # noqa: PLC0415
-
-    job = app.store.create_job("mix", {"purpose": "节奏感强的混剪", "budget_cny": 2.0})["id"]
+def _montage_job(app: App, media: Path) -> str:
+    job = app.store.create_job("mix", {"purpose": "节奏感强的混剪"})["id"]
     d = app.store.job_dir(job)
     for i in (1, 2, 3):
         shutil.copy(media / "montage" / f"clip{i}.mp4", d / "src" / f"clip{i}.mp4")
         ingest.register_source(app.store, job, {"kind": "upload", "file": f"src/clip{i}.mp4"})
     shutil.copy(media / "montage" / "music_120bpm.wav", d / "src" / "bgm.wav")
     ingest.register_source(app.store, job, {"kind": "upload", "file": "src/bgm.wav"})
-    gw = _MontageGW()
-    run = start(app, job, "montage", {"length": 8, "aspect": "9:16", "use_asr": False}, lambda c: pipe_montage.run_montage(c, gateway=gw))
-    r = wait(app, job, run["id"], 600)
+    return job
+
+
+def test_montage_prepare_then_agent_picks_shots_on_beats(app: App, media: Path) -> None:
+    from autocut.worker import pipe_montage  # noqa: PLC0415
+    from autocut.worker.pipeline import start  # noqa: PLC0415
+
+    job = _montage_job(app, media)
+    d = app.store.job_dir(job)
+    eyes = _MontageEyes()
+    r = wait(app, job, start(app, job, "montage_prepare", {"length": 8, "aspect": "9:16", "use_asr": False}, lambda c: pipe_montage.run_prepare(c, gateway=eyes))["id"], 600)
     assert r["status"] == "ok", r.get("result")
-    res = r["result"]
-    assert "agent 按主题挑选" in res["summary"] and "120" in res["summary"]
+    brief = r["result"]["brief"]
+    assert r["result"]["state"] == "needs_agent" and r["result"]["needs"] == "picks" and brief["bpm"] == 120 and brief["slots"] and brief["catalog"]
+    assert set(eyes.calls) == {"eyes"} and delivery.state(app.store, job)["status"] == "working"
+    # 像 agent 一样挑：逆序给槽位分配镜头（每个镜头最多用一次）
+    ids = [c["id"] for c in brief["catalog"]]
+    picks = [{"slot": s["slot"], "shot": ids[len(ids) - 1 - i], "why": "测试"} for i, s in enumerate(brief["slots"][:len(ids)])]  # 镜头比槽位少：只覆盖一部分，其余沿用默认
+    f = wait(app, job, start(app, job, "montage_finish", {"picks": json.dumps(picks)}, lambda c: pipe_montage.run_finish(c))["id"], 600)
+    assert f["status"] == "ok", f.get("result")
+    res = f["result"]
+    assert "DSH agent 按主题挑选" in res["summary"] and "120" in res["summary"] and "沿用配方默认选择" in res["summary"]
     plan = json.loads((d / "work" / "montage.autocut.json").read_text())
     segs = plan["outputs"][0]["segments"]
     picked = [s for s in segs if s.get("evidence", {}).get("pick")]
-    assert picked and len({s["evidence"]["pick"] for s in picked}) == len(picked)  # 每个镜头最多用一次
-    # 卡点没被破坏：每个槽位仍是拍间隔的整数倍，总长 = 整数小节（120BPM → 2s/小节）
+    assert picked and len({s["evidence"]["pick"] for s in picked}) == len(picked)
     total = sum(s["slot"] for s in segs)
-    assert total == pytest.approx(8.0, abs=0.01) and all(abs(s["slot"] / 0.5 - round(s["slot"] / 0.5)) < 1e-3 for s in segs)
+    assert total == pytest.approx(8.0, abs=0.01) and all(abs(s["slot"] / 0.5 - round(s["slot"] / 0.5)) < 1e-3 for s in segs)  # 卡点没被破坏
     dv = res["deliverables"][0]
     assert (d / dv["final"]).stat().st_size > 5_000 and (d / dv["preview"]).stat().st_size <= delivery.PREVIEW_MAX_BYTES
-    assert gw.calls.count("pick") == 1 and "槽位1" in gw.pick_prompt
+
+
+def test_montage_finish_rejects_bad_picks(app: App, media: Path) -> None:
+    from autocut.worker import pipe_montage  # noqa: PLC0415
+    from autocut.worker.pipeline import start  # noqa: PLC0415
+
+    job = _montage_job(app, media)
+    r = wait(app, job, start(app, job, "montage_finish", {"picks": []}, lambda c: pipe_montage.run_finish(c))["id"], 30)
+    assert r["result"]["error"]["code"] == "not_prepared"
+    r = wait(app, job, start(app, job, "montage_prepare", {"length": 8, "use_asr": False}, lambda c: pipe_montage.run_prepare(c, gateway=_MontageEyes()))["id"], 600)
+    ids = [c["id"] for c in r["result"]["brief"]["catalog"]]
+    cases = [([{"slot": 1, "shot": "Z99"}], "bad_picks"), ([{"slot": 99, "shot": ids[0]}], "bad_picks"), ([{"slot": 1, "shot": ids[0]}, {"slot": 2, "shot": ids[0]}], "duplicate_picks"), ([], "picks_required"), ("坏{", "bad_picks")]
+    for picks, code in cases:
+        f = wait(app, job, start(app, job, "montage_finish", {"picks": picks}, lambda c: pipe_montage.run_finish(c))["id"], 60)
+        assert f["status"] == "failed" and f["result"]["error"]["code"] == code, (picks, f["result"])
 
 
 def test_montage_needs_music(app: App) -> None:
@@ -325,5 +397,5 @@ def test_montage_needs_music(app: App) -> None:
 
     job = app.store.create_job("mix", {})["id"]
     ingest.register_source(app.store, job, {"kind": "upload", "file": "src/a.mp4"})
-    r = wait(app, job, start(app, job, "montage", {}, lambda c: pipe_montage.run_montage(c, gateway=_MontageGW()))["id"], 30)
+    r = wait(app, job, start(app, job, "montage_prepare", {}, lambda c: pipe_montage.run_prepare(c, gateway=_MontageEyes()))["id"], 30)
     assert r["status"] == "failed" and r["result"]["error"]["code"] == "no_music"
