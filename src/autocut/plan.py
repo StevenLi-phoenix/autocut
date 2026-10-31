@@ -111,6 +111,7 @@ class Bed:
     end: float | None = None  # None = 到素材结尾
     gain_db: float = 0.0
     duck_db: float = 0.0  # >0：主轨有声音时把这条压低多少 dB（BGM 让位于人声）
+    duck_main_db: float = 0.0  # >0：这条有声音时把主轨压低多少 dB（游戏原声让位于解说）
     role: str = "music"  # music | narration
 
 

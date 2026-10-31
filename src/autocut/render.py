@@ -574,7 +574,8 @@ def _build(plan: Plan, output: Output, burn_override: bool | None, workdir: Path
     if n_duck:  # 每条要闪避的 bed 各用一份主轨音频当侧链
         A.append("[acat]asplit=%d[amain]%s" % (n_duck + 1, "".join(f"[sc{i}]" for i in range(n_duck))))
         alabel = "amain"
-    mix_in, sc_i = [f"[{alabel}]"], 0
+    main_duck = [(j, b) for j, b in beds if b.duck_main_db > 0]  # 解说压低主轨（游戏原声让位于解说）
+    mix_in, sc_i = [], 0
     for j, b in beds:
         s = srcs[b.source]
         length = (b.end - b.start) if b.end is not None else None
@@ -595,6 +596,9 @@ def _build(plan: Plan, output: Output, burn_override: bool | None, workdir: Path
             ch.append(f"afade=t=out:st={_n(max(0.0, out_end - fo))}:d={_n(fo)}")
         lab = f"bed{j}"
         A.append(f"[{len(inputs) - 1}:a:{s.track}]{','.join(ch)}[{lab}]")
+        if b.duck_main_db > 0:  # 这条解说同时是主轨闪避的侧链：分成混音用和侧链用两份
+            A.append(f"[{lab}]asplit=2[{lab}m][{lab}k]")
+            lab += "m"
         if b.duck_db > 0:
             # 压低量 ≈ (1-1/ratio)·(人声电平-阈值)；按典型语音电平高出阈值 21 dB 估算 ratio，实际压多少随人声响度略有出入
             ratio = min(20.0, 1.0 / (1.0 - min(max(b.duck_db / 21.0, 0.1), 0.92)))
@@ -602,6 +606,18 @@ def _build(plan: Plan, output: Output, burn_override: bool | None, workdir: Path
             lab += "d"
             sc_i += 1
         mix_in.append(f"[{lab}]")
+    if main_duck:
+        keys = [f"[bed{j}k]" for j, _ in main_duck]
+        if len(keys) > 1:
+            A.append("".join(keys) + f"amix=inputs={len(keys)}:duration=longest:normalize=0[narrk]")
+            key = "[narrk]"
+        else:
+            key = keys[0]
+        db = max(b.duck_main_db for _, b in main_duck)
+        ratio = min(20.0, 1.0 / (1.0 - min(max(db / 21.0, 0.1), 0.92)))
+        A.append(f"[{alabel}]{key}sidechaincompress=threshold=0.0056:ratio={ratio:.2f}:attack=20:release=400:makeup=1[amaind]")
+        alabel = "amaind"
+    mix_in.insert(0, f"[{alabel}]")
     if beds:
         A.append("".join(mix_in) + f"amix=inputs={len(mix_in)}:duration=first:normalize=0:dropout_transition=0[amix]")
         alabel = "amix"

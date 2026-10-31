@@ -346,6 +346,8 @@ def _write_fcpxml(plan: Plan, output: Output, path: Path, *, markers_only: bool,
                                    start=T(int(round(b.start * float(fps)))), duration=T(dur), audioRole="music" if b.role == "music" else "dialogue")
             if b.gain_db:
                 ET.SubElement(bed_el, "adjust-volume", amount=f"{b.gain_db:g}dB")
+            if b.duck_main_db:
+                log.info("bed %s 压低主轨（%.0fdB）不随 FCPXML 导出：在剪辑软件里给主轨做自动闪避或手动压低", a.sid, b.duck_main_db)
             if b.duck_db:
                 log.info("bed %s 的 ducking（%.0fdB）不随 FCPXML 导出：在剪辑软件里用自动闪避或手动压低", a.sid, b.duck_db)
     if output.overlays:

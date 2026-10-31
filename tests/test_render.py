@@ -281,6 +281,44 @@ def test_duck_lowers_bgm_under_speech_only(tmp_path: Path) -> None:
     assert drop_db(pa) < drop_db(sp) - 5.0, (drop_db(sp), drop_db(pa))  # 说完话后 BGM 恢复
 
 
+def test_narration_bed_ducks_the_main_track(tmp_path: Path) -> None:
+    """解说压低主轨（duck_main_db）：解说响着的时候游戏/口播原声被压低，解说停了之后恢复；解说本身不被压。
+    两版其余完全相同，d = x(不压) - x(压) = 主轨被压掉的那部分，rms(d) = rms(主轨)·(1 - 10^(-D/20))。"""
+    import wave
+
+    sr = 48000
+    t = np.arange(int(2.0 * sr)) / sr
+    tone = (0.2 * np.sin(2 * np.pi * 1000 * t)).astype("<f4")
+    wav = tmp_path / "narr.wav"
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes((tone * 32767).astype("<i2").tobytes())
+    x: dict[float, np.ndarray] = {}
+    for duck in (0.0, 14.0):
+        plan = talk_plan(tmp_path, [Segment(id="s0", source="a", start=3.2, end=9.2)])
+        o = plan.outputs[0]
+        o.id = f"n{duck}"
+        plan.sources["n"] = Source(id="n", path=str(wav), kind="audio", duration=2.0)
+        o.beds = [Bed(source="n", at=1.0, role="narration", duck_main_db=duck)]  # 解说在输出 1–3s
+        x[duck] = decode_audio(one(render(plan)).path)
+    n = min(len(v) for v in x.values())
+    d = x[0.0][:n] - x[14.0][:n]
+    main = decode_audio(MEDIA / "talk_zh.mp4")[int(3.2 * sr):]
+    inside = slice(int(1.6 * sr), int(2.8 * sr))
+    after = slice(int(4.6 * sr), int(5.6 * sr))  # 解说停了 1.6s 之后，压缩器已释放
+
+    def drop_db(sl: slice) -> float:
+        frac = min(rms_lin(d[sl]) / rms_lin(main[sl]), 0.999)
+        return float(-20 * np.log10(1 - frac))
+
+    assert drop_db(inside) > 8.0, drop_db(inside)
+    assert drop_db(after) < drop_db(inside) - 5.0, (drop_db(inside), drop_db(after))
+    narr_level = rms_lin(x[14.0][:n][int(1.2 * sr):int(2.8 * sr)])
+    assert narr_level > 0.1, narr_level  # 解说本身没被压掉
+
+
 def rms_lin(x: np.ndarray) -> float:
     return float(np.sqrt(np.mean(x.astype(np.float64) ** 2)) + 1e-12)
 
