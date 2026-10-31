@@ -12,7 +12,7 @@
 | 按 PID 取消 | `Runner.cancel` 向 autocut 进程发 SIGTERM（它自己停 ffmpeg、删半成品），8 秒后强杀进程组 | `test_cancel_running_by_pid` |
 | 干净环境 | 子进程只带 PATH（私有 ffmpeg 在前）、HOME、AUTOCUT_ENCODER 等，不透传 worker 的环境 | `test_build_env_is_clean` |
 | 确认门 | `delivery.handoff` 只在状态 confirmed 之后可用；confirm 必须附用户原话（写入审计记录） | `test_handoff_blocked_until_confirmed` 等 |
-| 花费 | 不自建预算器：网关 key 的 `limit_usd` 兜底；worker 只记估价日志 | `test_gateway_has_no_budget_gate` |
+| 零 LLM | worker 代码里没有网关/模型/key；LLM 全在 DSH | `test_worker_has_no_llm_calls` |
 | 原始响应先落盘 | `<job>/work/llm/NNN-<purpose>.json` | `test_gateway_saves_raw_before_parse_and_tracks_spend` |
 
 ## 目录与数据
@@ -43,15 +43,17 @@
 | `POST /v1/jobs/<job>/{confirm,reject,handoff}` | 成片确认、被拒（原因码 + 原话 + 成片 id）、交付（`local` 或 `kaorou`） |
 | `GET /v1/metrics` | 最近 10 条成片通过率与是否进入多备选模式 |
 
-## 谁做什么（"一个大脑"）
-DSH 主 agent 是唯一的大脑：写解说稿、选段、挑镜头这些判断都在 DSH 里；worker 只做确定性的"手"（下载、识别、剪、TTS、混音、校验、出片、预览、确认门、交付）和"眼"（无状态的抽帧看图说话、给独立评审用的单次分类调用）。worker 没有写作/提名/挑选的 LLM 调用，也没有自建预算器；LLM 网关 key 的 `limit_usd` 是唯一的花费上限（平台已有机制）。
+## 谁做什么（"一个大脑"，autocut 里零 LLM）
+DSH 主 agent 是唯一的大脑：剪哪里、写解说稿、选段、挑镜头、编排 EDL 全部在 DSH 里；worker 只做确定性的"手"（下载、识别、取帧、TTS、混音、校验、渲染、预览、确认门、交付）和"眼"（关键帧拼图、场景切换点、响度曲线、说话段、OCR——复用烤肉的 `vision_ocr.swift`）。**worker 里没有任何 LLM 调用、网关 key 或预算器**（`tests/test_worker_signals.py::test_worker_has_no_llm_calls` 守着）。DSH 的模型 `deepseek-v4.1-flash`（opencode-go）的输入模态含 image，DSH 有 `read_image` 工具，所以 brief 里放拼图路径，agent 自己看（`ar fetch` + `read_image`，或 `ar frame` 取单帧）。agent 的输出一律当不可信输入校验，不合格返回逐条违例和修法。
 
-## 流水线（brief → agent 判断 → finish）
-- `cut`（一步）：cut → 保守策略（拿不准或"停在句子中间"的剪法改回保留）→ 体检 → render → 预览。
-- `commentary_prepare` → agent 写稿 → `commentary_finish`：prepare = cut + 抽帧看图 + 原声说话段 → brief（画面描述、说话段、字数/间隔约束）；finish = 校验稿子 → TTS（肥鱼，成批串行、按内容缓存，laptop 不通回落 macOS say 并在摘要里标降级）→ 按槽位定速，放不下的句子**原样退回 agent 缩短**（`lines_too_long`，附每句字数上限）→ 配音轨 → 方案（`Bed.duck_main_db` 压低原声 + 字幕烧录）→ 体检 → render → 预览。
-- `montage_prepare` → agent 挑镜头 → `montage_finish`：prepare = `autocut montage` 给拍点槽位 + 镜头库看图 + ASR 片段 → brief；finish = 校验 picks（每个镜头最多一次）→ 替换槽位画面（节拍不变）→ render → 预览。
-- clips：agent 用 `transcript`（分页、句段 ID）和 `clip`（按 ID 建候选，硬约束：时长/不切断话/开头有话/不是半句/不悬空开头/不重叠/不在禁区）选段 → `clips_review`（不同模型家族的独立评审，只看文字稿；每维度 ≥3 且总分 ≥20/30、无敏感词才过关）→ `clips_deliver`（只渲染评审过关的 select + backups，render 核验 + 抽帧 QA，失败用备选顶上）。被拒后 `ar status` 的 `rejections` 带着被拒区间（`clip --forbid`）和原因码，只补被拒的条数，最多 3 轮；最近 10 条通过率 <50% 自动多备选。
-所有流水线在"等 agent"或"等用户确认"时结束，并向 DSH 发 `autocut.needs_agent` / `autocut.ready`（失败 `autocut.failed`）事件。
+## 流水线（brief → agent 决定 → finish）
+- `cut_prepare` → `cut_finish`：prepare = `autocut cut` 出**提案**（每个停顿/重说/口头禅一个候选：理由、把握度、前后文字）；agent 决定 `keep=[…]`（恢复）和 `cut=[…]`（额外剪）；规则校验：id 存在、不剪锁定片段、"停在句子中间"的剪法自动改回保留并报告、最多剪掉 70%。
+- `commentary_prepare` → `commentary_finish`：prepare = cut + 关键帧拼图（带编号和时间）+ 场景切换 + 原声说话段 + OCR；finish = 校验稿子 → TTS（肥鱼，成批串行、按内容缓存，laptop 不通回落 macOS say 并在摘要里标降级）→ 按槽位定速，放不下的句子原样退回 agent 缩短（`lines_too_long`）→ 配音轨 → 方案（`Bed.duck_main_db` 压低原声 + 字幕烧录）→ 体检 → render → 预览。
+- `montage_prepare` → `montage_finish`：prepare = `autocut montage` 给拍点槽位 + 镜头中间帧拼图（标签 = 镜头 id）+ ASR 片段；finish = 校验 picks（每个镜头最多一次）→ 替换槽位画面（节拍不变）→ render → 预览。
+- clips：agent 用 `transcript`（分页、句段 ID）和 `clip`（按 ID 建候选，硬约束：时长/不切断话/开头有话/不是半句/不悬空开头/不重叠/不在禁区）选段 → `clips_deliver`（敏感词命中拒绝；render 核验 + 确定性 QA：黑屏/冻结；失败用备选顶上）。被拒后 `ar status` 的 `rejections` 带着被拒区间（`clip --forbid`）和原因码，只补被拒的条数，最多 3 轮；最近 10 条通过率 <50% 自动多备选。
+- `edl_finish`：agent 写 EDL（`segments:[{source,start,end,speed,note}]` + 可选 `lines` 解说），worker 校验（素材在 job 内或 inbox 链接、时间在素材时长内、倍速 0.25–240、≤300 段、成片 ≤ `max_seconds`）后执行；≥8 倍速的段用"只解关键帧"的延时摄影生成中间片段（几十小时的 HEVC 解不起）。大文件用 `ingest {"inbox_link": …}` 符号链接进 job（只读，分析缓存写到 `<root>/_worker/cache`）。
+- 其它：`POST /v1/jobs/<job>/frame {source,t,width}` 取单帧。
+所有流水线在"等 agent"或"等用户确认"时结束，并向 DSH 发 `autocut.needs_agent` / `autocut.ready`（失败 `autocut.failed`）事件（事件发射器默认可关：secrets 里不放 token 就不发）。
 
 ## 部署（mini）
-`deploy/install-mini.sh [--restart]`：拉代码、同步依赖、登记 `~/.config/tcc-host/allow.json`、写 LaunchAgent `app.lishuyu.autocut.worker`（经 tcc-host 拉起，持有外置盘授权）。密钥在 `~/services/autocut/worker.env`（600）：`AUTOCUT_LLM_KEY`（网关专用 key，只给看图和独立评审用）、`AUTOCUT_DSH_EVENT_TOKEN`；其余配置见 `deploy/app.lishuyu.autocut.worker.plist`。**重启 worker 会中断进行中的流水线**（启动时标为 failed）。
+`deploy/install-mini.sh [--restart]`：拉代码、同步依赖、登记 `~/.config/tcc-host/allow.json`、写 LaunchAgent `app.lishuyu.autocut.worker`（经 tcc-host 拉起，持有外置盘授权）。密钥在 `~/services/autocut/worker.env`（600）：`AUTOCUT_DSH_EVENT_TOKEN`；其余配置见 `deploy/app.lishuyu.autocut.worker.plist`。**重启 worker 会中断进行中的流水线**（启动时标为 failed）。

@@ -1,11 +1,12 @@
 # autocut
 
-本地自动剪辑：配方先写出一份可以审阅的**方案**（`*.autocut.json`，每一刀带理由和把握度），人在审阅页、agent 用 CLI 改同一份方案，再出片、导出剪辑软件工程、发布前体检。autocut 本身离线、确定性；需要判断的步骤（写解说稿、选段、挑镜头）由 DSH agent 做，worker 只做手和眼。
+本地自动剪辑：配方先写出一份可以审阅的**方案**（`*.autocut.json`，每一刀带理由和把握度），人在审阅页、agent 用 CLI 改同一份方案，再出片、导出剪辑软件工程、发布前体检。autocut 本身离线、确定性、**没有任何 LLM 调用**；所有判断（剪哪里、写解说稿、选段、挑镜头）由 DSH agent 做，worker 只做手和眼，并把 agent 的输出当不可信输入校验。
 
-- **口播/录课/实况粗剪**（`cut`）：去长停顿、重说、口头禅；无人核对时拿不准的剪法一律改回保留。
-- **游戏实况解说配音**（`commentary_prepare` → agent 写稿 → `commentary_finish`）：抽帧看画面 → TTS → 解说压低原声 → 字幕烧录。
+- **口播/录课/实况粗剪**（CLI `cut` 出提案；worker `cut_prepare` → agent 决定 → `cut_finish`）：去长停顿、重说、口头禅。
+- **游戏实况解说配音**（`commentary_prepare` → agent 写稿 → `commentary_finish`）：关键帧拼图 → TTS → 解说压低原声 → 字幕烧录。
+- **自由编排**（`edl_finish`）：agent 写剪辑计划（时间段 + 倍速 + 解说），worker 校验后执行；适合几十小时的素材。
 - **混剪**（`montage_prepare` → agent 挑镜头 → `montage_finish`）：按音乐节拍卡点，镜头库带画面描述。
-- **长视频切竖屏短片**（`highlights` 信号 / agent 自己选段 `transcript` + `clip`）：硬约束 → 独立评审 → 渲染 QA，宁缺毋滥。
+- **长视频切竖屏短片**（`highlights` 信号 / agent 自己选段 `transcript` + `clip`）：硬约束 → 渲染核验 → 黑屏/冻结 QA。
 - **接入 DSH**：`autocut-worker` 把 CLI 包成本机 HTTP 服务，DSH agent 在微信里接任务、发成片预览、等用户确认后才交付/上传。详见 [docs/dev/worker.md](docs/dev/worker.md)。
 
 ## 用法
