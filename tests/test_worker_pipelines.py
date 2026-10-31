@@ -414,6 +414,11 @@ def test_frame_endpoint_and_inbox_link(app: App, media: Path) -> None:
     for bad in ({"source": "/etc/hosts", "t": 1}, {"source": "src/vod.mp4", "t": -1}):
         with pytest.raises(policy.PolicyError):
             app.handle("POST", f"/v1/jobs/{job}/frame", {}, bad)
+    code, sh = app.handle("POST", f"/v1/jobs/{job}/sheet", {}, {"items": [{"source": "src/vod.mp4", "t": 5}, {"source": "src/vod.mp4", "t": 60}, {"source": "src/vod.mp4", "t": 120}], "cols": 3})
+    assert sh["ok"] and (app.store.job_dir(job) / sh["path"]).stat().st_size > 2000 and len(sh["cells"]) == 3
+    for bad in ({"items": []}, {"items": [{"source": "/etc/hosts", "t": 1}]}):
+        with pytest.raises(policy.PolicyError):
+            app.handle("POST", f"/v1/jobs/{job}/sheet", {}, bad)
     inbox = app.cfg.root / "inbox"
     inbox.mkdir(exist_ok=True)
     shutil.copy(media / "talk_zh.mp4", inbox / "big.mp4")

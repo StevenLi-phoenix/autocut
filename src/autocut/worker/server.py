@@ -121,6 +121,21 @@ class App:
             dst.parent.mkdir(parents=True, exist_ok=True)
             signals.grab(src, t, dst, width=w)
             return 200, {"ok": True, "path": str(dst.relative_to(d)), "next": [{"cmd": f"autocut-remote fetch {job_id} {dst.relative_to(d)}", "why": "拉到本机后用 read_image 看"}]}
+        if sub == ["sheet"] and method == "POST":  # 一批时间点拼成一张带编号和时间的拼图（agent 一次看多处）
+            items = body.get("items")
+            if not isinstance(items, list) or not (1 <= len(items) <= 24):
+                raise PolicyError("bad_items", "items 需要 1–24 项，每项 {source, t}", '例如 {"items":[{"source":"src/x.mp4","t":120},{"source":"src/x.mp4","t":3600}]}')
+            cells = []
+            for k, it in enumerate(items):
+                src = policy.inside(d, str(it.get("source", "")))
+                t = float(it.get("t", 0))
+                if t < 0:
+                    raise PolicyError("bad_time", "t 不能为负", "秒数")
+                cells.append((src, t, f"{k + 1} {src.name[-18:-4]} {int(t) // 3600}:{int(t) % 3600 // 60:02d}:{int(t) % 60:02d}"))
+            name = f"sheet-{int(time.time())}"
+            dst = signals.contact_sheet(cells, d / "work" / "sheets", name, cols=int(body.get("cols", 4)))
+            return 200, {"ok": True, "path": str(dst.relative_to(d)), "cells": [{"i": k + 1, "source": it["source"], "t": it["t"]} for k, it in enumerate(items)],
+                         "next": [{"cmd": f"autocut-remote fetch {job_id} {dst.relative_to(d)}", "why": "拉到本机后用 read_image 看；格子上的编号对应 cells"}]}
         if sub == ["preview"] and method == "POST":  # 重新压预览（微信上传超时时用更小的）
             mib = float(body.get("max_mib", 4))
             st = delivery.state(self.store, job_id)
