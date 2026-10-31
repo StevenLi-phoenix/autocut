@@ -259,3 +259,71 @@ def test_clips_pipeline_stops_after_three_rejection_rounds(app: App) -> None:
     run = start(app, job, "clips", {}, lambda c: pipe_clips.run_clips(c, gateway=_ClipsGW()))
     r = wait(app, job, run["id"], 30)
     assert r["status"] == "failed" and r["result"]["error"]["code"] == "too_many_rounds" and "更明确" in r["result"]["error"]["fix"]
+
+
+# ------------------------------------------------------------------ montage（假 LLM，真节拍 / 镜头 / render）
+
+
+class _MontageGW:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.pick_prompt = ""
+
+    def chat_json(self, model, messages, *, purpose, validate=None, **kw):
+        import re  # noqa: PLC0415
+
+        self.calls.append(purpose)
+        if purpose == "vision":
+            n = sum(1 for p in messages[0]["content"] if p.get("type") == "image_url")
+            out = {"shots": [{"i": i + 1, "desc": f"画面{i + 1}", "appeal": 3 + (i % 3)} for i in range(n)]}
+        else:
+            text = messages[0]["content"]
+            self.pick_prompt = text
+            shots = re.findall(r"^- ([A-Z]\d+)｜", text, re.M)
+            slots = [int(x) for x in re.findall(r"^- 槽位(\d+)：", text, re.M)]
+            out = {"picks": [{"slot": s, "shot": shots[(len(shots) - 1 - i) % len(shots)], "why": "测试"} for i, s in enumerate(slots)]}
+        if validate:
+            validate(out)
+        return out
+
+    def spent_cny(self) -> float:
+        return 0.05
+
+
+def test_montage_pipeline_agent_picks_shots_on_beats(app: App, media: Path) -> None:
+    from autocut.worker import pipe_montage  # noqa: PLC0415
+    from autocut.worker.pipeline import start  # noqa: PLC0415
+
+    job = app.store.create_job("mix", {"purpose": "节奏感强的混剪", "budget_cny": 2.0})["id"]
+    d = app.store.job_dir(job)
+    for i in (1, 2, 3):
+        shutil.copy(media / "montage" / f"clip{i}.mp4", d / "src" / f"clip{i}.mp4")
+        ingest.register_source(app.store, job, {"kind": "upload", "file": f"src/clip{i}.mp4"})
+    shutil.copy(media / "montage" / "music_120bpm.wav", d / "src" / "bgm.wav")
+    ingest.register_source(app.store, job, {"kind": "upload", "file": "src/bgm.wav"})
+    gw = _MontageGW()
+    run = start(app, job, "montage", {"length": 8, "aspect": "9:16", "use_asr": False}, lambda c: pipe_montage.run_montage(c, gateway=gw))
+    r = wait(app, job, run["id"], 600)
+    assert r["status"] == "ok", r.get("result")
+    res = r["result"]
+    assert "agent 按主题挑选" in res["summary"] and "120" in res["summary"]
+    plan = json.loads((d / "work" / "montage.autocut.json").read_text())
+    segs = plan["outputs"][0]["segments"]
+    picked = [s for s in segs if s.get("evidence", {}).get("pick")]
+    assert picked and len({s["evidence"]["pick"] for s in picked}) == len(picked)  # 每个镜头最多用一次
+    # 卡点没被破坏：每个槽位仍是拍间隔的整数倍，总长 = 整数小节（120BPM → 2s/小节）
+    total = sum(s["slot"] for s in segs)
+    assert total == pytest.approx(8.0, abs=0.01) and all(abs(s["slot"] / 0.5 - round(s["slot"] / 0.5)) < 1e-3 for s in segs)
+    dv = res["deliverables"][0]
+    assert (d / dv["final"]).stat().st_size > 5_000 and (d / dv["preview"]).stat().st_size <= delivery.PREVIEW_MAX_BYTES
+    assert gw.calls.count("pick") == 1 and "槽位1" in gw.pick_prompt
+
+
+def test_montage_needs_music(app: App) -> None:
+    from autocut.worker import pipe_montage  # noqa: PLC0415
+    from autocut.worker.pipeline import start  # noqa: PLC0415
+
+    job = app.store.create_job("mix", {})["id"]
+    ingest.register_source(app.store, job, {"kind": "upload", "file": "src/a.mp4"})
+    r = wait(app, job, start(app, job, "montage", {}, lambda c: pipe_montage.run_montage(c, gateway=_MontageGW()))["id"], 30)
+    assert r["status"] == "failed" and r["result"]["error"]["code"] == "no_music"
