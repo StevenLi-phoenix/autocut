@@ -382,7 +382,8 @@ def test_edl_finish_executes_agent_plan_with_timelapse_and_narration(app: App, m
     plan = json.loads((d / "work" / "edl.commentary.autocut.json").read_text())
     segs = plan["outputs"][0]["segments"]
     assert len(segs) == 3 and segs[1]["reason"] == "shot" and "延时摄影" in segs[1]["detail"] and segs[1]["mute"] is True  # 20 倍速 → 延时摄影中间片段
-    assert (d / "work" / "edl-clips" / "tl002.mp4").stat().st_size > 1000
+    tl = list((d / "work" / "edl-clips").glob("tl002-*.mp4"))
+    assert tl and tl[0].stat().st_size > 1000 and abs(segs[1]["end"] - 6.0) < 0.4  # 120s 的 20 倍速 = 6s：成片时长恰好是 区间/倍速
     dv = r["result"]["deliverables"][0]
     assert (d / dv["final"]).stat().st_size > 5_000 and "2 句解说" in r["result"]["summary"] and "DSH agent" in r["result"]["summary"]
 

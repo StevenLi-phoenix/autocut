@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import subprocess
@@ -92,10 +93,9 @@ def validate_edl(ctx: Ctx, edl: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _timelapse(ctx: Ctx, src: Path, a: float, b: float, speed: float, dst: Path) -> None:
     """只解关键帧的延时摄影：每隔 speed/OUT_FPS 秒取一帧，成片约 (b-a)/speed 秒。"""
-    step = speed / OUT_FPS
-    vf = f"select='isnan(prev_selected_t)+gte(t-prev_selected_t,{step:.4f})',setpts=N/({OUT_FPS}*TB),scale=1920:-2,fps={OUT_FPS},format=yuv420p"
-    cmd = ["nice", "-n", "10", "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-skip_frame", "nokey", "-i", str(src), "-an", "-vf", vf, "-fps_mode", "vfr",
-           "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", str(dst)]
+    # 只解关键帧（GOP 比取样间隔长时，实际取样点就是关键帧）；时间轴按倍速压缩，fps 滤镜把帧补齐到 OUT_FPS，成片时长恰好是 (b-a)/speed
+    vf = f"setpts=(PTS-STARTPTS)/{speed:.4f},fps={OUT_FPS},scale=1920:-2,format=yuv420p"
+    cmd = ["nice", "-n", "10", "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-skip_frame", "nokey", "-i", str(src), "-an", "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", str(dst)]
     p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     while p.poll() is None:
         if ctx.cancelled.is_set():
@@ -123,7 +123,7 @@ def run_finish(ctx: Ctx, *, tts: TTS | None = None) -> dict[str, Any]:
         src_path = ctx.path(s["source"])
         sid = next((k for k, v in sources.items() if v[0] == s["source"]), None)
         if s["speed"] >= TIMELAPSE_FROM:
-            clip = tdir / f"tl{i:03d}.mp4"
+            clip = tdir / f"tl{i:03d}-{hashlib.md5(json.dumps([s['source'], s['start'], s['end'], s['speed']]).encode()).hexdigest()[:8]}.mp4"
             if not clip.exists():
                 with ctx.app.runner.heavy_slot():
                     _timelapse(ctx, src_path, s["start"], s["end"], s["speed"], clip)
