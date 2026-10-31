@@ -135,7 +135,7 @@ class Gateway:
         log.info("LLM %s model=%s tokens=%s usd=%.5f（累计 ¥%.3f / ¥%g）%.1fs", purpose, model, usage.get("total_tokens"), usd, self.spent_cny(), self.budget_cny, time.perf_counter() - t0)
         if not text and data["choices"][0].get("finish_reason") == "length":
             raise LLMError("llm_truncated", "模型输出被截断（max_tokens 太小，推理模型会把额度花在思考上）", "调大 max_tokens 或换非推理模型")
-        return {"text": text, "usage": usage, "usd": usd, "raw_path": str(raw_path)}
+        return {"text": text, "usage": usage, "usd": usd, "raw_path": str(raw_path), "finish": data["choices"][0].get("finish_reason")}
 
     def chat_json(self, model: str, messages: list[dict[str, Any]], *, purpose: str, validate: Any = None, **kw: Any) -> Any:
         """要求返回 JSON；解析/校验失败时把错误反馈给模型重试一次（再花一次预算）。"""
@@ -143,6 +143,11 @@ class Gateway:
         err = ""
         for attempt in range(2):
             r = self.chat(model, msgs, purpose=purpose if attempt == 0 else purpose + "-retry", **kw)
+            if r.get("finish") == "length":  # 输出被截断：JSON 必然不完整，直接把 max_tokens 翻倍重来，不用把半截输出喂回去
+                kw = {**kw, "max_tokens": min(int(kw.get("max_tokens", 4000)) * 2, 16000)}
+                log.warning("LLM %s 输出被截断，max_tokens 提到 %d 重试", purpose, kw["max_tokens"])
+                r2 = self.chat(model, msgs, purpose=purpose + "-longer", **kw)
+                r = r2
             try:
                 obj = extract_json(r["text"])
                 if validate:

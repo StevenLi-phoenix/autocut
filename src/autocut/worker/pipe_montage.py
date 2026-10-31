@@ -140,7 +140,7 @@ def run_montage(ctx: Ctx, *, gateway: Gateway | None = None) -> dict[str, Any]:
         rows = catalog[b:b + BATCH]
         parts = [image_part(grab_frame(medias[r["src"]].path, (r["a"] + r["b"]) / 2, fdir / f"{r['id']}.jpg", width=480)) for r in rows]
         res = gw.chat_json(VISION_MODEL, [{"role": "user", "content": [{"type": "text", "text": describe_prompt(rows, theme)}, *parts]}], purpose="vision",
-                           validate=validate_described(len(rows)), max_tokens=2000, temperature=0.2)
+                           validate=validate_described(len(rows)), max_tokens=3500, temperature=0.2)
         for r, d in zip(rows, res["shots"]):
             r["desc"], r["appeal"] = str(d["desc"])[:60], d["appeal"]
     (ctx.dir / "work" / "montage-catalog.json").write_text(json.dumps(catalog, ensure_ascii=False, indent=1), encoding="utf-8")

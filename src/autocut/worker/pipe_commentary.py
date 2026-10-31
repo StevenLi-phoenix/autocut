@@ -72,7 +72,7 @@ def run_commentary(ctx: Ctx, *, gateway: Gateway | None = None, tts: TTS | None 
             fp = C.grab_frame(plan.source_path(sid), st, fdir / f"f{b + k:03d}.jpg")
             parts.append(image_part(fp))
         msg = [{"role": "user", "content": [{"type": "text", "text": C.vision_prompt(chunk, hint)}, *parts]}]
-        res = gw.chat_json(VISION_MODEL, msg, purpose="vision", validate=C.validate_frames(len(chunk)), max_tokens=1500, temperature=0.2)
+        res = gw.chat_json(VISION_MODEL, msg, purpose="vision", validate=C.validate_frames(len(chunk)), max_tokens=3500, temperature=0.2)
         for t, fr in zip(chunk, res["frames"]):
             frames.append({"t": t, "desc": str(fr["desc"])[:80]})
     (ctx.dir / "work" / "frames.json").write_text(json.dumps(frames, ensure_ascii=False, indent=1), encoding="utf-8")

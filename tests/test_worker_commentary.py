@@ -284,3 +284,30 @@ def test_tts_falls_back_to_system_voice_when_services_down(tmp_path: Path, monke
     r = t.synth_many(["你好世界"], voice="vivian", lang="Chinese")
     assert r[0][2] == "say" and r[0][1] > 0.3
     assert t.stats["provider"] == {"say": 1}
+
+
+def test_chat_json_doubles_max_tokens_when_truncated(fake_gw: WorkerConfig, tmp_path: Path) -> None:
+    """finish_reason=length 说明 JSON 被截断：翻倍 max_tokens 重来，而不是把半截输出当 JSON 解析失败。"""
+    gw = Gateway(fake_gw, tmp_path / "job", 100.0)
+    orig = FakeGateway.do_POST
+    calls = {"n": 0}
+
+    def truncating(self):
+        calls["n"] += 1
+        n = int(self.headers["Content-Length"])
+        req = json.loads(self.rfile.read(n))
+        FakeGateway.seen.append(req)
+        FakeGateway.spend += 0.01
+        first = calls["n"] == 1
+        body = json.dumps({"choices": [{"message": {"content": '{"a": [1, 2' if first else '{"a": [1, 2]}'}, "finish_reason": "length" if first else "stop"}], "usage": {"total_tokens": 50}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    FakeGateway.do_POST = truncating  # type: ignore[method-assign]
+    try:
+        obj = gw.chat_json("deepseek-flash", [{"role": "user", "content": "x"}], purpose="t", max_tokens=100)
+    finally:
+        FakeGateway.do_POST = orig  # type: ignore[method-assign]
+    assert obj == {"a": [1, 2]} and FakeGateway.seen[-1]["max_tokens"] == 200
