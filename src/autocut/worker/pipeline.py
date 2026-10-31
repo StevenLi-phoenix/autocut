@@ -89,6 +89,10 @@ class Ctx:
 
 def start(app: App, job_id: str, name: str, opts: dict[str, Any], fn: Callable[[Ctx], dict[str, Any]]) -> dict[str, Any]:
     app.store.get_job(job_id)
+    for (j, rid), c in list(app.pipeline_ctx.items()):  # 幂等：同一个 job 里同名流水线已经在跑就返回它（agent 重复提交时不重复渲染）
+        if j == job_id and c.run.get("cmd") == name and c.run.get("status") == "running":
+            log.info("pipeline %s/%s 已在运行（%s），返回已有 run，不重复启动", job_id, name, rid)
+            return {**c.run, "reused": True}
     run_id = app.store.new_run_id()
     run = {"id": run_id, "job": job_id, "kind": "pipeline", "cmd": name, "args": [], "opts": opts, "status": "running", "heavy": False,
            "created_at": time.time(), "started_at": time.time(), "stages": []}

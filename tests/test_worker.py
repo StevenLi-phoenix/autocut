@@ -659,3 +659,24 @@ def test_preview_endpoint_resizes_live_previews(http: Any, app: App, tmp_path: P
     code, b, _ = http("POST", f"/v1/jobs/{job}/preview", {"max_mib": 0.5})
     assert code == 200 and b["previews"][0]["bytes"] <= 0.5 * 1024 * 1024 + 2 * 2**20
     assert delivery.state(app.store, job)["deliverables"][0]["preview"].startswith("out/preview-5-")
+
+
+def test_pipeline_start_is_idempotent_while_running(app: App) -> None:
+    from autocut.worker.pipeline import start
+
+    job = app.store.create_job("t", {})["id"]
+    gate = threading.Event()
+
+    def slow(ctx):
+        gate.wait(10)
+        return {"ok": True}
+
+    r1 = start(app, job, "demo", {}, slow)
+    r2 = start(app, job, "demo", {}, slow)  # agent 手快提交了两次
+    assert r2["id"] == r1["id"] and r2.get("reused") is True
+    r3 = start(app, job, "other", {}, slow)  # 不同名的流水线不受影响
+    assert r3["id"] != r1["id"]
+    gate.set()
+    wait_done(app, job, r1["id"])
+    r4 = start(app, job, "demo", {}, lambda c: {"ok": True})  # 跑完之后可以重新提交（例如缩短后重提稿子）
+    assert r4["id"] != r1["id"]
