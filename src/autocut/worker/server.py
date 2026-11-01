@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Mapping
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -324,8 +325,16 @@ def make_server(cfg: WorkerConfig, app: App | None = None) -> ThreadingHTTPServe
     return srv
 
 
+def log_format(env: Mapping[str, str] | None = None) -> str:
+    """AMS 下（设了 AMS_SERVICE_ID）用 `LEVEL name: message`：AMS 自己加时间戳、按开头的级别判 escalation。"""
+    e = os.environ if env is None else env
+    if e.get("AMS_SERVICE_ID"):
+        return "%(levelname)s %(name)s: %(message)s"
+    return "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
 def main() -> int:
-    logging.basicConfig(level=os.environ.get("AUTOCUT_WORKER_LOG", "INFO"), stream=sys.stderr, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.basicConfig(level=os.environ.get("AUTOCUT_WORKER_LOG", "INFO"), stream=sys.stderr, format=log_format())
     cfg = WorkerConfig.from_env()
     os.environ["AUTOCUT_CACHE"] = str(cfg.root / "_worker" / "cache")  # 分析缓存不写到素材旁边（inbox 是只读的）
     policy.EXTRA_READ_ROOTS.append(cfg.root / "inbox")
@@ -343,7 +352,7 @@ def main() -> int:
 
     emitter = Emitter(cfg, app.store)
     app.runner.on_finish(emitter)
-    log.info("DSH 事件：%s", "已启用 → " + emitter.url if emitter.enabled else "未启用（secrets 里没有 AUTOCUT_DSH_EVENT_TOKEN）")
+    log.info("DSH 事件：%s", "已启用 → " + emitter.url if emitter.enabled else "未启用（环境变量和 secrets 文件里都没有 AUTOCUT_DSH_EVENT_TOKEN）")
     srv = make_server(cfg, app)
     log.info("autocut-worker 监听 http://%s:%d root=%s encoder=%s heavy_slots=%d autocut=%s", cfg.host, cfg.port, cfg.root, cfg.encoder, cfg.heavy_slots, list(cfg.autocut_cmd))
     try:

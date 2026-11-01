@@ -1,0 +1,57 @@
+# autocut worker (DSH hands) on 127.0.0.1:8102, as dsh-runtime under AMS. Migrated from LaunchAgent
+# app.lishuyu.autocut.worker (tcc-host). Runs from the deploy copy /Users/Shared/ams-apps/autocut
+# (deploy/ams-deploy.sh). Install: sudo -n -u dsh-runtime tee /Users/dsh-runtime/.ams/services/autocut-worker/service.toml
+# Secrets (ams secret set autocut-worker <NAME>, value on stdin; read by worker/config.py load_secrets):
+#   AUTOCUT_FEIYU_KEY        feiyu TTS key (laptop :19880)
+#   AUTOCUT_DSH_EVENT_TOKEN  DSH ingest token for autocut.* events
+# Restarting kills a pipeline in flight (marked failed on start): check GET /v1/jobs first.
+id = "autocut-worker"
+name = "autocut worker (DSH hands)"
+secrets = ["AUTOCUT_FEIYU_KEY", "AUTOCUT_DSH_EVENT_TOKEN"]
+
+[start]
+argv = ["/Users/Shared/ams-apps/autocut/.venv/bin/python", "-m", "autocut.worker"]
+workdir = "/Users/Shared/ams-apps/autocut"
+
+[env]
+TMPDIR = "/Volumes/MiniSSD/autocut/_worker/tmp"
+AUTOCUT_WORKER_ROOT = "/Volumes/MiniSSD/autocut"
+AUTOCUT_WORKER_PORT = "${PORT_main}"
+AUTOCUT_WORKER_FFMPEG_DIR = "/Users/Shared/ams-apps/kaorou-ffmpeg/bin"
+AUTOCUT_WORKER_INGEST_PYTHON = "/Users/Shared/ams-apps/kaorou/.venv/bin/python"
+# non-secret yt-dlp settings for ingest (cookies file written by kaorou-cookies, PO-token server)
+AUTOCUT_WORKER_INGEST_ENV_FILE = "/Users/Shared/ams-apps/autocut/ingest.env"
+AUTOCUT_WORKER_SENSITIVE_WORDS = "/Users/Shared/ams-apps/kaorou/src/yt2bili/sensitive_words.txt"
+AUTOCUT_WORKER_OCR_BIN = "/Users/Shared/ams-apps/autocut/bin/vision_ocr"
+AUTOCUT_WHISPER_CLI = "/opt/homebrew/bin/whisper-cli"
+AUTOCUT_WHISPER_MODEL = "/Volumes/MiniSSD/autocut/models"
+AUTOCUT_TTS_FEIYU_URL = "http://100.117.175.117:19880"
+AUTOCUT_ENCODER = "libx264"
+
+[ports]
+main = 8102
+
+[runtime]
+kind = "none"
+
+[health]
+kind = "http"
+port = "main"
+path = "/health"
+interval_s = 30
+timeout_s = 5
+start_period_s = 30
+
+[stop]
+signal = "SIGTERM"
+timeout_s = 20
+
+[restart]
+policy = "always"
+max_retries = 20
+backoff_s = 10
+backoff_max_s = 300
+
+[logging]
+# stderr is `LEVEL name: message` under AMS (worker/server.py log_format)
+format = "level-prefix"

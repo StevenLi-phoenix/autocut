@@ -20,9 +20,10 @@ from autocut.worker.store import Store, atomic_write_json, read_json
 
 log = logging.getLogger(__name__)
 MEDIA_EXT = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".flac", ".aac", ".png", ".jpg", ".jpeg", ".srt", ".md", ".txt", ".json"}
-# 只从烤肉 .env 摘这些变量给 yt-dlp（不透传 LLM key、内部密钥等）
+# 只从 ingest env 文件摘这些变量给 yt-dlp（不透传 LLM key、内部密钥等）。不含 KAOROU_YT_COOKIES_BROWSER：
+# 那条路读 Chrome 钥匙串，worker 在 AMS 下以 dsh-runtime 运行，没有钥匙串；cookies 只用 KAOROU_YT_COOKIES_PATH 文件。
 YT_ENV_WHITELIST = ("KAOROU_YT_COOKIES_PATH", "KAOROU_POT_BASE_URL", "KAOROU_YT_FORCE_IPV4", "KAOROU_YT_IMPERSONATE",
-                    "KAOROU_YT_COOKIES_BROWSER", "KAOROU_JS_RUNTIME_DIR")
+                    "KAOROU_JS_RUNTIME_DIR")
 
 
 def parse_env_file(path: Path, keys: tuple[str, ...]) -> dict[str, str]:

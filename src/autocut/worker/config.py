@@ -12,9 +12,17 @@ DEFAULT_PORT = 8102
 RESERVED_NAMES = {"models", "_worker", "inbox"}  # 不能当 job 名
 
 
+#: 只有这些名字会从环境变量读（AMS 把 `ams secret` 作为环境变量注入）；其它环境变量不当 secret。
+SECRET_NAMES = ("AUTOCUT_FEIYU_KEY", "AUTOCUT_DSH_EVENT_TOKEN", "AUTOCUT_DSH_EVENT_URL")
+
+
 def load_secrets(path: str | None) -> dict[str, str]:
-    """读 KEY=VALUE 的 secrets 文件。值只在内存里，不记日志。"""
-    out: dict[str, str] = {}
+    """密钥：先读环境变量（AMS secret），再用 KEY=VALUE 的 secrets 文件补上缺的。
+
+    AMS 下不配 `AUTOCUT_WORKER_SECRETS_FILE`，值全部来自环境变量；launchd 下照旧读文件。
+    值只在内存里，不记日志。
+    """
+    out: dict[str, str] = {k: v for k in SECRET_NAMES if (v := os.environ.get(k, ""))}
     if not path:
         return out
     try:
@@ -22,7 +30,7 @@ def load_secrets(path: str | None) -> dict[str, str]:
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
-                out[k.strip()] = v.strip().strip("\"'")
+                out.setdefault(k.strip(), v.strip().strip("\"'"))
     except OSError:
         pass
     return out

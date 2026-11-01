@@ -12,6 +12,10 @@
 - **autocut 里没有任何 LLM 调用**（用户 2026-10-31 的决定）：判断全部由 DSH agent 做。
 - worker `POST /v1/jobs/<job>/sheet`：一批时间点拼成一张带编号和时间的图，agent 一次看多处。
 
+### Changed
+- worker 迁入 AMS（服务 `autocut-worker`，以 `dsh-runtime` 运行）：`load_secrets` 先读环境变量 `AUTOCUT_FEIYU_KEY`/`AUTOCUT_DSH_EVENT_TOKEN`/`AUTOCUT_DSH_EVENT_URL`（AMS secret），secrets 文件只补缺；设了 `AMS_SERVICE_ID` 时日志格式为 `LEVEL name: message`；新增 `deploy/ams/service.toml` 与 `deploy/ams-deploy.sh`。
+- ingest 不再把 `KAOROU_YT_COOKIES_BROWSER` 传给 yt-dlp（那条路读 Chrome 钥匙串，`dsh-runtime` 没有钥匙串），cookies 只走 `KAOROU_YT_COOKIES_PATH`。
+
 ### Fixed
 - `fetch` 读不了 inbox 符号链接文件（README/报告）；`edl_finish` 提交时就拒绝 4–8 倍速（方案只收 ≤4，延时摄影从 8 起），不再等到渲染才报错。
 
