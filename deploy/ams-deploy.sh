@@ -1,6 +1,6 @@
 #!/bin/bash
 # Deploy this checkout to the AMS deploy copy and restart the AMS service autocut-worker. Run on the mini
-# as the owner (lishuyu) from ~/services/autocut after `git pull`. Replaces deploy/install-mini.sh once the
+# as the owner (lishuyu) or the service user (dsh-runtime) from the source checkout after `git pull`. Replaces deploy/install-mini.sh once the
 # worker runs under AMS (as dsh-runtime, which cannot read the owner's home or uv pythons).
 #
 #   deploy/ams-deploy.sh [--no-restart]
@@ -47,8 +47,15 @@ fi
 chmod -R a+rX "$DEST"
 
 if [ "$restart" = 1 ]; then
-  ams() { sudo -n -u dsh-runtime env HOME=/Users/dsh-runtime AMS_STATE_DIR=/Users/dsh-runtime/.ams \
-            /Users/dsh-runtime/ams/.venv/bin/ams "$@"; }
+  # The owner goes through sudo; DSH already runs as the service user.
+  ams() {
+    if [ "$(id -un)" = dsh-runtime ]; then
+      env AMS_STATE_DIR=/Users/dsh-runtime/.ams /Users/dsh-runtime/ams/.venv/bin/ams "$@"
+    else
+      sudo -n -u dsh-runtime env HOME=/Users/dsh-runtime AMS_STATE_DIR=/Users/dsh-runtime/.ams \
+        /Users/dsh-runtime/ams/.venv/bin/ams "$@"
+    fi
+  }
   echo "ams-deploy: ams ctl restart autocut-worker"
   ( cd / && ams ctl restart autocut-worker )
 fi

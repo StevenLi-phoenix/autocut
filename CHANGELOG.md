@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- `deploy/ams-deploy.sh` 也能以 `dsh-runtime` 身份运行：已经是服务用户时不再走 sudo，DSH 可以自己部署。
 - `autocut-worker`：本机 HTTP 外壳（白名单、路径限定、异步 run、取消、重活互斥、ingest、上传/下载），供 DSH agent 调用。
 - 流水线 `cut_prepare`/`_finish`、`commentary_prepare`/`_finish`、`montage_prepare`/`_finish`、`clips_deliver`、`edl_finish`：worker 做手和眼，判断（写稿、选段、挑镜头）由 DSH agent 做；成片确认门（confirm/reject/handoff），handoff 到烤肉（默认仅自己可见）。
 - CLI `transcript`（分页、句段 ID）与 `clip`（按 ID 新建候选 + 硬约束）；`Bed.duck_main_db`（解说压低原声）。
