@@ -30,12 +30,13 @@ fi
 mkdir -p "$DEST/bin"
 
 echo "ams-deploy: rsync $SRC -> $DEST"
-rsync -a --delete \
+# -rlpc, not -a: the deploy copy holds files of both the owner and dsh-runtime, and only a file's owner may set its mtime.
+rsync -rlpc --delete \
   --exclude /.git --exclude /.venv --exclude /bin --exclude /ingest.env --exclude /worker.env --exclude '/.worker.env*' \
   --exclude /logs --exclude /tests --exclude /evals --exclude /fixtures --exclude __pycache__ --exclude '*.pyc' \
   --exclude '*.bak.*' --exclude .pytest_cache \
   "$SRC/" "$DEST/"
-if [ -x "$SRC/bin/vision_ocr" ]; then cp -p "$SRC/bin/vision_ocr" "$DEST/bin/vision_ocr"; fi
+if [ -x "$SRC/bin/vision_ocr" ]; then cp "$SRC/bin/vision_ocr" "$DEST/bin/vision_ocr"; fi
 
 echo "ams-deploy: venv in $DEST"
 export UV_PYTHON_INSTALL_DIR=/Users/Shared/ams-apps/python UV_PYTHON_PREFERENCE=only-managed
