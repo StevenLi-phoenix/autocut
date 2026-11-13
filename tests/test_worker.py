@@ -530,7 +530,7 @@ def test_emitter_posts_with_bearer_and_survives_failure(tmp_path: Path) -> None:
     srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     sec = tmp_path / "w.env"
-    sec.write_text(f"AUTOCUT_DSH_EVENT_TOKEN=tok123\nAUTOCUT_DSH_EVENT_URL=http://127.0.0.1:{srv.server_address[1]}/hooks/lsy\n")
+    sec.write_text(f"AUTOCUT_DSH_EVENT_TOKEN=tok123\nAUTOCUT_DSH_EVENT_URL=http://127.0.0.1:{srv.server_address[1]}/hooks/events\n")
     em = events.Emitter(WorkerConfig(root=tmp_path, secrets_file=str(sec)))
     em("j", {"id": "r-1", "kind": "pipeline", "cmd": "cut", "status": "failed", "result": {"error": {"code": "x", "message": "m", "fix": "f"}}})
     assert got and got[0][0] == "Bearer tok123" and got[0][1]["kind"] == "autocut.failed"

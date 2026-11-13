@@ -20,7 +20,7 @@ from autocut.worker.policy import PolicyError
 from autocut.worker.store import Store, atomic_write_json, read_json
 
 log = logging.getLogger(__name__)
-# 微信文件上限 25 MiB，但 mini 到微信 CDN 的上行实测只有约 65 KB/s，lsy-wechat 每次上传 60 秒超时
+# 微信文件上限 25 MiB，但 mini 到微信 CDN 的上行实测只有约 65 KB/s，DSH 的 wechat 插件每次上传 60 秒超时
 # （2026-10-31：22 MiB 和 10 MiB 的预览都超时）。默认压到 8 MiB，可用环境变量 AUTOCUT_PREVIEW_MIB 调整。
 PREVIEW_MAX_BYTES = int(float(os.environ.get("AUTOCUT_PREVIEW_MIB", "8")) * 1024 * 1024)
 REASONS = {"length", "standalone", "boring", "irrelevant", "captions", "copyright", "other"}

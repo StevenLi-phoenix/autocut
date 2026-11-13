@@ -14,6 +14,7 @@
 - worker `POST /v1/jobs/<job>/sheet`：一批时间点拼成一张带编号和时间的图，agent 一次看多处。
 
 ### Changed
+- DSH 事件默认推到 `http://127.0.0.1:3081/hooks/events`（`AUTOCUT_DSH_EVENT_URL` 的默认值）：DSH 的旧路由别名要下线。
 - worker 迁入 AMS（服务 `autocut-worker`，以 `dsh-runtime` 运行）：`load_secrets` 先读环境变量 `AUTOCUT_FEIYU_KEY`/`AUTOCUT_DSH_EVENT_TOKEN`/`AUTOCUT_DSH_EVENT_URL`（AMS secret），secrets 文件只补缺；设了 `AMS_SERVICE_ID` 时日志格式为 `LEVEL name: message`；新增 `deploy/ams/service.toml` 与 `deploy/ams-deploy.sh`。
 - ingest 不再把 `KAOROU_YT_COOKIES_BROWSER` 传给 yt-dlp（那条路读 Chrome 钥匙串，`dsh-runtime` 没有钥匙串），cookies 只走 `KAOROU_YT_COOKIES_PATH`。
 

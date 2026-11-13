@@ -1,4 +1,4 @@
-"""DSH 事件：流水线结束时 POST 到 DSH 的 /hooks/lsy（source=autocut）：autocut.needs_agent（准备好了，等 agent 做判断）、autocut.ready（成片等用户确认）、autocut.failed。
+"""DSH 事件：流水线结束时 POST 到 DSH 的 /hooks/events（source=autocut）：autocut.needs_agent（准备好了，等 agent 做判断）、autocut.ready（成片等用户确认）、autocut.failed。
 
 事件文字只描述"发生了什么 + 去哪看"，不含任何指令；agent 回 worker 取摘要（status / run）。失败不影响流水线本身（只记日志）。
 """
@@ -14,7 +14,7 @@ from typing import Any
 from autocut.worker.config import WorkerConfig, load_secrets
 
 log = logging.getLogger(__name__)
-DEFAULT_URL = "http://127.0.0.1:3081/hooks/lsy"
+DEFAULT_URL = "http://127.0.0.1:3081/hooks/events"
 
 
 def event_for(job_id: str, run: dict[str, Any]) -> dict[str, Any] | None:
